@@ -118,8 +118,10 @@ button.btn-primary { border: none; }
 .agg-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
 .agg-table tr:last-child td { border-bottom: none; }
 .agg-table tr:hover td { background: rgba(59,130,246,0.04); }
-.agg-table td:first-child a { color: var(--accent); text-decoration: none; font-weight: 500; }
-.agg-table td:first-child a:hover { text-decoration: underline; }
+.agg-table tr.agg-excluded td { opacity: 0.35; }
+.agg-table td:first-child { width: 28px; text-align: center; }
+.agg-table td:nth-child(3) a { color: var(--accent); text-decoration: none; font-weight: 500; }
+.agg-table td:nth-child(3) a:hover { text-decoration: underline; }
 
 /* ── Misc ─────────────────────────────────────────────────────────────────── */
 .loading { color: var(--muted); padding: 32px; text-align: center; font-size: 0.9rem; }
@@ -149,6 +151,7 @@ const BUCKET_SEC = 30;       // distribution bucket width in seconds
 let eventsCache  = null;          // all 2026 district/regional events
 let matchesCache = {};            // eventKey → processed rows
 let activeCharts = {};            // chartId → Chart instance
+let aggState     = null;          // current aggregate page state (for exclusion toggles)
 
 // ── Router ───────────────────────────────────────────────────────────────────
 window.addEventListener('hashchange', route);
@@ -175,6 +178,7 @@ function destroyCharts() {
 function mkChart(id, config) {
   const el = document.getElementById(id);
   if (!el) return;
+  if (activeCharts[id]) { try { activeCharts[id].destroy(); } catch {} }
   activeCharts[id] = new Chart(el.getContext('2d'), config);
 }
 
@@ -628,14 +632,20 @@ async function viewOverall() {
 
 // ── Shared aggregate renderer ─────────────────────────────────────────────────
 function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaChartMode) {
-  const pooledCts = [], pooledDs = [], pooledSchedCts = [];
-  for (const rows of allRows) {
-    if (!rows) continue;
-    pooledCts.push(...cycleTimes(rows));
-    pooledDs.push(...deltas(rows));
-    pooledSchedCts.push(...scheduledCycleTimes(rows));
+  aggState = { events, allRows, excluded: new Set(), deltaChartMode };
+
+  function pooled() {
+    const cts = [], ds = [], schedCts = [];
+    for (let i = 0; i < allRows.length; i++) {
+      if (aggState.excluded.has(i) || !allRows[i]) continue;
+      cts.push(...cycleTimes(allRows[i]));
+      ds.push(...deltas(allRows[i]));
+      schedCts.push(...scheduledCycleTimes(allRows[i]));
+    }
+    return { cts, ds, schedCts };
   }
 
+  const { cts: pooledCts, ds: pooledDs, schedCts: pooledSchedCts } = pooled();
   const eventsWithData = events.filter((_, i) => allRows[i] && cycleTimes(allRows[i]).length > 0);
   const totalMatches   = allRows.reduce((s, r) => s + (r ? r.filter(x => x.actual).length : 0), 0);
 
@@ -645,7 +655,7 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
     <p class="page-sub">${subtitle}${totalMatches ? ` · ${totalMatches.toLocaleString()} matches played` : ''}</p>
     <div class="card">
       <h2>Cycle Time Statistics</h2>
-      <div class="stats-grid">${renderStats(pooledCts, pooledDs, pooledSchedCts)}</div>
+      <div class="stats-grid" id="agg-stats-grid">${renderStats(pooledCts, pooledDs, pooledSchedCts)}</div>
     </div>
     <div class="charts-grid">
       <div class="card"><h2>Distribution</h2><div class="chart-wrap"><canvas id="agg-dist"></canvas></div></div>
@@ -657,19 +667,27 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
     </div>
     <div class="card">
       <h2>By Event</h2>
-      <div class="table-wrap">${renderAggTable(events, allRows)}</div>
+      <div class="table-wrap" id="agg-table-wrap">${renderAggTable(events, allRows, aggState.excluded)}</div>
     </div>`;
   setApp(html);
 
-  // Distribution chart
   if (pooledCts.length) mkChart('agg-dist', distChartConfig(pooledCts));
-
-  // Delta bar chart
   if (deltaChartMode === 'per-event') {
     renderPerEventDeltaChart(eventsWithData, events, allRows);
   } else {
     renderPerWeekDeltaChart(events, allRows);
   }
+
+  aggState.pooled    = pooled;
+  aggState.redraw    = function() {
+    const { cts, ds, schedCts } = aggState.pooled();
+    const statsEl = document.getElementById('agg-stats-grid');
+    if (statsEl) statsEl.innerHTML = renderStats(cts, ds, schedCts);
+    if (cts.length) mkChart('agg-dist', distChartConfig(cts));
+    const withData = aggState.events.filter((_, i) => !aggState.excluded.has(i) && allRows[i] && cycleTimes(allRows[i]).length > 0);
+    if (aggState.deltaChartMode === 'per-event') renderPerEventDeltaChart(withData, aggState.events, allRows);
+    else renderPerWeekDeltaChart(aggState.events, allRows);
+  };
 }
 
 function renderPerEventDeltaChart(eventsWithData, allEvents, allRows) {
@@ -727,8 +745,19 @@ function renderPerWeekDeltaChart(events, allRows) {
   });
 }
 
-function renderAggTable(events, allRows) {
-  let html = '<table class="agg-table"><thead><tr><th>Week</th><th>Event</th><th>Location</th><th>Matches</th><th>Avg Sched CT</th><th>Mean CT</th><th>Median CT</th><th>Std Dev</th><th>Avg Δ Sched</th></tr></thead><tbody>';
+window.toggleAggEvent = function(idx) {
+  if (!aggState) return;
+  if (aggState.excluded.has(idx)) aggState.excluded.delete(idx);
+  else aggState.excluded.add(idx);
+  // Update row style in-place without re-rendering the table
+  const row = document.querySelector(`#agg-table-wrap tr[data-idx="${idx}"]`);
+  if (row) row.classList.toggle('agg-excluded', aggState.excluded.has(idx));
+  aggState.redraw();
+};
+
+function renderAggTable(events, allRows, excluded) {
+  excluded = excluded || new Set();
+  let html = '<table class="agg-table"><thead><tr><th></th><th>Week</th><th>Event</th><th>Location</th><th>Matches</th><th>Avg Sched CT</th><th>Mean CT</th><th>Median CT</th><th>Std Dev</th><th>Avg Δ Sched</th></tr></thead><tbody>';
   for (let i = 0; i < events.length; i++) {
     const e        = events[i];
     const cts      = cycleTimes(allRows[i]);
@@ -737,7 +766,9 @@ function renderAggTable(events, allRows) {
     const played   = allRows[i] ? allRows[i].filter(r => r.actual).length : 0;
     const avgD     = ds.length ? fmtDeltaObj(mean(ds)) : { text: '—', cls: '' };
     const wk       = e.week != null ? `<a href="#week/${e.week + 1}" style="color:var(--accent);text-decoration:none">Wk ${e.week + 1}</a>` : '—';
-    html += `<tr>
+    const excCls   = excluded.has(i) ? ' agg-excluded' : '';
+    html += `<tr data-idx="${i}" class="${excCls}">
+      <td><input type="checkbox" ${excluded.has(i) ? '' : 'checked'} onchange="toggleAggEvent(${i})" title="Include in aggregate"></td>
       <td class="muted-cell">${wk}</td>
       <td><a href="#event/${e.key}">${e.name}</a></td>
       <td class="muted-cell">${[e.city, e.state_prov].filter(Boolean).join(', ')}</td>
