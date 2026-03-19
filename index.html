@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FRC 2026 Cycle Times</title>
+<style>
+:root {
+  --bg: #FAFAFA; --surface: #FFFFFF; --text: #1A1A1A;
+  --muted: #6B7280; --border: #D1D5DB; --accent: #3B82F6;
+  --success: #10B981; --warning: #F59E0B; --error: #EF4444;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0F0F0F; --surface: #1A1A1A; --text: #F0F0F0;
+    --muted: #9CA3AF; --border: #374151; --accent: #3B82F6;
+    --success: #10B981; --warning: #F59E0B; --error: #EF4444;
+  }
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; min-height: 100vh; }
+.container { max-width: 1100px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 4px; }
+h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 12px; }
+p.subtitle { color: var(--muted); font-size: 0.875rem; margin-bottom: 20px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+.btn-primary {
+  display: inline-flex; align-items: center; height: 40px; padding: 0 20px;
+  background: var(--accent); color: #fff; border: none; border-radius: 6px;
+  font-weight: 600; font-size: 0.9rem; cursor: pointer; text-decoration: none;
+}
+.btn-primary:hover { filter: brightness(1.1); }
+.btn-secondary {
+  display: inline-flex; align-items: center; height: 34px; padding: 0 14px;
+  background: none; color: var(--accent); border: 1px solid var(--accent);
+  border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer; text-decoration: none;
+}
+.btn-secondary:hover { background: rgba(59,130,246,0.08); }
+.btn-ghost {
+  display: inline-flex; align-items: center; height: 30px; padding: 0 12px;
+  background: none; color: var(--muted); border: 1px solid var(--border);
+  border-radius: 5px; font-size: 0.8rem; cursor: pointer; text-decoration: none;
+}
+.btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+.back-btn {
+  display: inline-flex; align-items: center; gap: 4px; color: var(--accent);
+  font-size: 0.85rem; font-weight: 500; text-decoration: none; margin-bottom: 16px;
+}
+.back-btn:hover { text-decoration: underline; }
+button.btn-primary { border: none; }
+
+/* ── Stats ────────────────────────────────────────────────────────────────── */
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; }
+.stat { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; text-align: center; }
+.stat-value { font-size: 1.4rem; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.stat-label { font-size: 0.7rem; color: var(--muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.03em; }
+.ahead  { color: var(--success); }
+.behind { color: var(--error); }
+
+/* ── Charts ───────────────────────────────────────────────────────────────── */
+.charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+@media (max-width: 720px) { .charts-grid { grid-template-columns: 1fr; } }
+.chart-wrap { position: relative; height: 220px; }
+.chart-wrap-tall { position: relative; }
+
+/* ── Home page ────────────────────────────────────────────────────────────── */
+.home-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+.week-section { margin-bottom: 24px; }
+.week-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 12px; flex-wrap: wrap; }
+.week-label { font-size: 1.1rem; font-weight: 700; }
+.week-dates { font-size: 0.8rem; color: var(--muted); margin-left: 8px; }
+.event-list { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.event-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.event-row:last-child { border-bottom: none; }
+.event-row:hover { background: rgba(59,130,246,0.03); }
+.event-row-info { flex: 1; min-width: 0; }
+.event-row-name { font-size: 0.9rem; font-weight: 500; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.event-row-loc  { font-size: 0.78rem; color: var(--muted); }
+.event-row-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.event-status { font-size: 0.72rem; font-weight: 600; padding: 2px 8px; border-radius: 99px; white-space: nowrap; }
+.status-done     { background: rgba(107,114,128,0.12); color: var(--muted); }
+.status-live     { background: rgba(16,185,129,0.15);  color: var(--success); }
+.status-upcoming { background: transparent; color: var(--muted); font-weight: 400; }
+
+/* ── Event input (event view) ─────────────────────────────────────────────── */
+.input-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { font-size: 0.8rem; font-weight: 500; color: var(--muted); }
+.field input { height: 40px; padding: 0 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 0.9rem; }
+.field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+.typeahead-wrap { position: relative; }
+.typeahead-dropdown { position: absolute; top: 100%; left: 0; right: 0; z-index: 100; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; margin-top: 2px; max-height: 260px; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+.typeahead-item { padding: 8px 12px; cursor: pointer; font-size: 0.875rem; display: flex; gap: 10px; align-items: baseline; border-bottom: 1px solid var(--border); }
+.typeahead-item:last-child { border-bottom: none; }
+.typeahead-item:hover, .typeahead-item.active { background: rgba(59,130,246,0.1); }
+.typeahead-key  { font-weight: 600; color: var(--accent); font-size: 0.8rem; white-space: nowrap; }
+.typeahead-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Match table ──────────────────────────────────────────────────────────── */
+.table-wrap { overflow-x: auto; }
+.match-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.match-table th { text-align: left; padding: 6px 10px; border-bottom: 2px solid var(--border); color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
+.match-table td { padding: 5px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.match-table tr:last-child td { border-bottom: none; }
+.match-table tr.break-row td { text-align: center; color: var(--muted); font-style: italic; font-size: 0.78rem; padding: 3px; background: var(--bg); }
+.match-table tr:hover:not(.break-row) td { background: rgba(59,130,246,0.04); }
+.match-table tr.outlier-row td { color: var(--muted); }
+.outlier-badge { font-size: 0.7rem; color: var(--muted); margin-left: 4px; font-style: italic; }
+.muted-cell { color: var(--muted); }
+
+/* ── Aggregate event table ────────────────────────────────────────────────── */
+.agg-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.agg-table th { text-align: left; padding: 6px 10px; border-bottom: 2px solid var(--border); color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
+.agg-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.agg-table tr:last-child td { border-bottom: none; }
+.agg-table tr:hover td { background: rgba(59,130,246,0.04); }
+.agg-table td:first-child a { color: var(--accent); text-decoration: none; font-weight: 500; }
+.agg-table td:first-child a:hover { text-decoration: underline; }
+
+/* ── Misc ─────────────────────────────────────────────────────────────────── */
+.loading { color: var(--muted); padding: 32px; text-align: center; font-size: 0.9rem; }
+.error   { color: var(--error); padding: 32px; text-align: center; font-size: 0.9rem; }
+.event-header-info { margin-bottom: 16px; }
+.event-header-name { font-size: 1.1rem; font-weight: 600; }
+.event-header-detail { font-size: 0.85rem; color: var(--muted); margin-top: 2px; }
+.hidden { display: none !important; }
+.page-title { font-size: 1.4rem; font-weight: 700; margin-bottom: 4px; }
+.page-sub   { font-size: 0.85rem; color: var(--muted); margin-bottom: 20px; }
+.progress-note { color: var(--muted); font-size: 0.85rem; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div id="app"><div class="loading">Loading…</div></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+'use strict';
+const TBA_KEY    = 'OgkQlossATyHZij8FEAKl0opKiW63fDDSf7Fcwnr9jcJON5XwiGHgmCVZvjFb1Lv';
+const BREAK_GAP  = 15 * 60; // seconds — gaps larger than this are breaks
+const BUCKET_SEC = 30;       // distribution bucket width in seconds
+
+// ── Shared state ─────────────────────────────────────────────────────────────
+let eventsCache  = null;          // all 2026 district/regional events
+let matchesCache = {};            // eventKey → processed rows
+let activeCharts = {};            // chartId → Chart instance
+
+// ── Router ───────────────────────────────────────────────────────────────────
+window.addEventListener('hashchange', route);
+document.addEventListener('DOMContentLoaded',  route);
+
+function route() {
+  const hash  = decodeURIComponent(location.hash.slice(1)) || '';
+  const parts = hash.split('/');
+  const page  = parts[0];
+  const param = parts.slice(1).join('/');
+  destroyCharts();
+  if (!page || page === 'home') return viewHome();
+  if (page === 'event')   return viewEvent(param);
+  if (page === 'week')    return viewWeek(parseInt(param, 10));
+  if (page === 'overall') return viewOverall();
+  viewHome();
+}
+
+function setApp(html) { document.getElementById('app').innerHTML = html; }
+function destroyCharts() {
+  for (const c of Object.values(activeCharts)) { try { c.destroy(); } catch {} }
+  activeCharts = {};
+}
+function mkChart(id, config) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  activeCharts[id] = new Chart(el.getContext('2d'), config);
+}
+
+// ── TBA fetching ─────────────────────────────────────────────────────────────
+const TBA_HEADERS = { headers: { 'X-TBA-Auth-Key': TBA_KEY } };
+
+async function fetchEvents() {
+  if (eventsCache) return eventsCache;
+  const r = await fetch('https://www.thebluealliance.com/api/v3/events/2026', TBA_HEADERS);
+  if (!r.ok) throw new Error('Failed to load event list');
+  const all = await r.json();
+  eventsCache = all
+    .filter(e => e.event_type === 0 || e.event_type === 1)
+    .sort((a, b) => (a.week ?? 99) - (b.week ?? 99) || a.name.localeCompare(b.name));
+  return eventsCache;
+}
+
+async function fetchEventRows(code) {
+  if (matchesCache[code]) return matchesCache[code];
+  const r = await fetch(`https://www.thebluealliance.com/api/v3/event/${code}/matches`, TBA_HEADERS);
+  if (!r.ok) return null;
+  const rows = processMatches(await r.json());
+  matchesCache[code] = rows;
+  return rows;
+}
+
+function iqrOutlierBounds(values) {
+  if (values.length < 4) return { lo: -Infinity, hi: Infinity };
+  const s = [...values].sort((a, b) => a - b);
+  const q1 = s[Math.floor(s.length * 0.25)];
+  const q3 = s[Math.floor(s.length * 0.75)];
+  const iqr = q3 - q1;
+  return { lo: q1 - 1.5 * iqr, hi: q3 + 1.5 * iqr };
+}
+
+function processMatches(data) {
+  const quals = data.filter(m => m.comp_level === 'qm').sort((a, b) => a.match_number - b.match_number);
+  const rows = quals.map((m, i) => {
+    let cycleTime = null, isPostBreak = (i === 0);
+    if (i > 0 && m.actual_time && quals[i - 1].actual_time) {
+      const gap = m.actual_time - quals[i - 1].actual_time;
+      if (gap > BREAK_GAP) isPostBreak = true;
+      else cycleTime = gap;
+    }
+    const delta = (m.time && m.actual_time) ? m.time - m.actual_time : null;
+    return { matchNum: m.match_number, scheduled: m.time, actual: m.actual_time, cycleTime, isPostBreak, delta, isOutlier: false };
+  });
+  // Mark IQR outliers (replays, data oddities) — don't include in stats or charts
+  const rawCts = rows.map(r => r.cycleTime).filter(v => v != null);
+  const { lo, hi } = iqrOutlierBounds(rawCts);
+  for (const r of rows) {
+    if (r.cycleTime != null && (r.cycleTime < lo || r.cycleTime > hi)) r.isOutlier = true;
+  }
+  return rows;
+}
+
+async function fetchManyEvents(events, onProgress) {
+  const results = new Array(events.length).fill(null);
+  let i = 0, done = 0;
+  async function worker() {
+    while (i < events.length) {
+      const idx = i++;
+      results[idx] = await fetchEventRows(events[idx].key);
+      onProgress && onProgress(++done, events.length);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(8, events.length) }, worker));
+  return results;
+}
+
+// ── Stats helpers ─────────────────────────────────────────────────────────────
+function mean(a)   { return a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0; }
+function median(a) {
+  if (!a.length) return 0;
+  const s = [...a].sort((x, y) => x - y), m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+function stddev(a) {
+  if (a.length < 2) return 0;
+  const m = mean(a);
+  return Math.sqrt(a.reduce((s, x) => s + (x - m) ** 2, 0) / a.length);
+}
+function cycleTimes(rows) { return (rows || []).filter(r => r.cycleTime != null && !r.isOutlier).map(r => r.cycleTime); }
+function deltas(rows)     { return (rows || []).filter(r => r.delta != null).map(r => r.delta); }
+
+// ── Formatters ────────────────────────────────────────────────────────────────
+function fmtDur(s) {
+  if (s == null) return '—';
+  s = Math.round(Math.abs(s));
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+function fmtDeltaObj(s) {
+  if (s == null) return { text: '—', cls: '' };
+  const abs = Math.round(Math.abs(s));
+  const str = Math.floor(abs / 60) + ':' + String(abs % 60).padStart(2, '0');
+  if (s >  5) return { text: '+' + str, cls: 'ahead' };
+  if (s < -5) return { text: '−' + str, cls: 'behind' };
+  return { text: str, cls: '' };
+}
+function fmtTime(u) {
+  if (!u) return '—';
+  return new Date(u * 1000).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+}
+function fmtDate(d) {
+  if (!d) return '';
+  const [y, mo, day] = d.split('-').map(Number);
+  return new Date(y, mo - 1, day).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+function eventStatus(e) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (e.end_date < today)   return { label: 'Completed',   cls: 'status-done' };
+  if (e.start_date <= today) return { label: 'In Progress', cls: 'status-live' };
+  return { label: fmtDate(e.start_date), cls: 'status-upcoming' };
+}
+
+// ── Shared stat card HTML ─────────────────────────────────────────────────────
+function statCard(val, label, cls) {
+  return `<div class="stat"><div class="stat-value ${cls||''}">${val}</div><div class="stat-label">${label}</div></div>`;
+}
+function renderStats(cts, ds) {
+  if (!cts.length) return '<div style="color:var(--muted);font-size:0.875rem">No timing data yet.</div>';
+  const avgD   = ds.length ? mean(ds) : null;
+  const deltaH = avgD != null
+    ? statCard(fmtDeltaObj(avgD).text, 'Mean Δ Schedule', fmtDeltaObj(avgD).cls)
+    : '';
+  return [
+    statCard(cts.length,           'Cycle Times'),
+    statCard(fmtDur(mean(cts)),    'Mean'),
+    statCard(fmtDur(median(cts)),  'Median (P50)'),
+    statCard(fmtDur(stddev(cts)),  'Std Dev'),
+    statCard(fmtDur(Math.min(...cts)), 'Min'),
+    statCard(fmtDur(Math.max(...cts)), 'Max'),
+    deltaH,
+  ].join('');
+}
+
+// ── Shared distribution chart config ─────────────────────────────────────────
+function distChartConfig(cts) {
+  const buckets = {};
+  for (const ct of cts) {
+    const b = Math.floor(ct / BUCKET_SEC) * BUCKET_SEC;
+    buckets[b] = (buckets[b] || 0) + 1;
+  }
+  const keys = Object.keys(buckets).map(Number).sort((a, b) => a - b);
+  const labels = [], data = [];
+  for (let b = keys[0]; b <= keys[keys.length - 1]; b += BUCKET_SEC) {
+    labels.push(fmtDur(b));
+    data.push(buckets[b] || 0);
+  }
+  return {
+    type: 'bar',
+    data: { labels, datasets: [{ data, backgroundColor: '#3b82f6b3', borderColor: '#3b82f6', borderWidth: 1 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { title: { display: true, text: 'Cycle Time (m:ss)' }, grid: { color: '#88888822' } },
+        y: { title: { display: true, text: 'Matches' }, beginAtZero: true, ticks: { stepSize: 1 }, grid: { color: '#88888822' } },
+      },
+    },
+  };
+}
+
+// ── VIEW: Home ────────────────────────────────────────────────────────────────
+async function viewHome() {
+  document.title = 'FRC 2026 Cycle Times';
+  setApp('<div class="loading">Loading events…</div>');
+  try {
+    const events = await fetchEvents();
+    const byWeek = {};
+    for (const e of events) {
+      const w = e.week != null ? e.week : 'other';
+      (byWeek[w] = byWeek[w] || []).push(e);
+    }
+    const weekKeys = Object.keys(byWeek).sort((a, b) => {
+      if (a === 'other') return 1; if (b === 'other') return -1;
+      return Number(a) - Number(b);
+    });
+
+    let html = `
+      <div class="home-header">
+        <div>
+          <h1>⏱ FRC 2026 Cycle Times</h1>
+          <p class="subtitle">Qual match cycle time analysis · ${events.length} events</p>
+        </div>
+        <a href="#overall" class="btn-primary">📊 Overall Season</a>
+      </div>`;
+
+    for (const wk of weekKeys) {
+      const weekNum = wk === 'other' ? null : Number(wk) + 1;
+      const label   = weekNum ? `Week ${weekNum}` : 'Other';
+      const evts    = byWeek[wk];
+      const dates   = evts.map(e => e.start_date).filter(Boolean).sort();
+      const dateStr = dates.length
+        ? fmtDate(dates[0]) + (dates[dates.length - 1] !== dates[0] ? ' – ' + fmtDate(dates[dates.length - 1]) : '')
+        : '';
+
+      html += `<div class="week-section">
+        <div class="week-header">
+          <div>
+            <span class="week-label">${label}</span>
+            ${dateStr ? `<span class="week-dates">${dateStr}</span>` : ''}
+          </div>
+          ${weekNum != null ? `<a href="#week/${weekNum}" class="btn-secondary">View Week Aggregate →</a>` : ''}
+        </div>
+        <div class="event-list">`;
+
+      for (const e of evts) {
+        const st = eventStatus(e);
+        html += `<div class="event-row">
+          <div class="event-row-info">
+            <span class="event-row-name">${e.name}</span>
+            <span class="event-row-loc">${[e.city, e.state_prov].filter(Boolean).join(', ')}</span>
+          </div>
+          <div class="event-row-right">
+            <span class="event-status ${st.cls}">${st.label}</span>
+            <a href="#event/${e.key}" class="btn-ghost">View →</a>
+          </div>
+        </div>`;
+      }
+      html += `</div></div>`;
+    }
+    setApp(html);
+  } catch (e) {
+    setApp(`<div class="error">Error: ${e.message}</div>`);
+  }
+}
+
+// ── VIEW: Event detail ────────────────────────────────────────────────────────
+async function viewEvent(code) {
+  document.title = code ? `${code.toUpperCase()} – Cycle Times` : 'FRC Cycle Times';
+
+  setApp(`
+    <a href="#home" class="back-btn">← All Events</a>
+    <div class="card">
+      <div class="input-row">
+        <div class="field" style="flex:2;min-width:160px">
+          <label>Event Code</label>
+          <div class="typeahead-wrap">
+            <input id="eventCode" type="text" value="${code || ''}" placeholder="Event code or name…" spellcheck="false" autocomplete="off">
+            <div id="typeaheadDropdown" class="typeahead-dropdown hidden"></div>
+          </div>
+        </div>
+        <button class="btn-primary" onclick="navigateEvent()">Analyze</button>
+      </div>
+      <div id="evt-status" style="margin-top:8px;font-size:0.875rem;color:var(--muted)"></div>
+    </div>
+    <div id="evt-results" class="hidden">
+      <div class="card">
+        <div class="event-header-info">
+          <div class="event-header-name" id="evt-name"></div>
+          <div class="event-header-detail" id="evt-detail"></div>
+        </div>
+        <h2>Cycle Time Statistics</h2>
+        <div class="stats-grid" id="evt-stats"></div>
+      </div>
+      <div class="charts-grid">
+        <div class="card"><h2>Distribution</h2><div class="chart-wrap"><canvas id="evt-dist"></canvas></div></div>
+        <div class="card"><h2>Ahead / Behind Schedule</h2><div class="chart-wrap"><canvas id="evt-sched"></canvas></div></div>
+      </div>
+      <div class="card">
+        <h2>Match Log</h2>
+        <div class="table-wrap" id="evt-table"></div>
+      </div>
+    </div>`);
+
+  initTypeahead();
+  if (!code) return;
+
+  const statusEl = document.getElementById('evt-status');
+  statusEl.textContent = 'Loading…';
+
+  try {
+    const [rows, eventData] = await Promise.all([
+      fetchEventRows(code),
+      fetch(`https://www.thebluealliance.com/api/v3/event/${code}`, TBA_HEADERS).then(r => r.ok ? r.json() : {}),
+    ]);
+    if (!rows || rows.length === 0) throw new Error('No qual matches found');
+
+    statusEl.textContent = '';
+    document.getElementById('evt-name').textContent   = eventData.name || code.toUpperCase();
+    document.getElementById('evt-detail').textContent =
+      [eventData.city, eventData.state_prov, eventData.country].filter(Boolean).join(', ') +
+      (eventData.start_date ? '  ·  ' + eventData.start_date : '');
+
+    const cts = cycleTimes(rows), ds = deltas(rows);
+    document.getElementById('evt-stats').innerHTML = renderStats(cts, ds);
+
+    // Distribution chart
+    if (cts.length) mkChart('evt-dist', distChartConfig(cts));
+
+    // Ahead/behind line chart
+    const schedRows = rows.filter(r => r.delta != null);
+    if (schedRows.length) {
+      const dvals = schedRows.map(r => +(r.delta / 60).toFixed(2));
+      const ptColors = dvals.map(d => d >= 0 ? '#10b981' : '#ef4444');
+      mkChart('evt-sched', {
+        type: 'line',
+        data: {
+          labels: schedRows.map(r => r.matchNum),
+          datasets: [
+            { data: dvals.map(() => 0), borderColor: '#88888866', borderDash: [4,4], borderWidth: 1, pointRadius: 0, fill: false, tension: 0 },
+            { label: 'Δ Schedule', data: dvals, borderColor: '#3b82f6', backgroundColor: '#3b82f618', fill: true, tension: 0.2, pointRadius: 3, pointBackgroundColor: ptColors, pointBorderColor: ptColors },
+          ],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                title: i => 'Match ' + i[0].label,
+                label: i => i.datasetIndex === 0 ? null : (i.raw >= 0 ? '+' : '') + i.raw.toFixed(2) + ' min ' + (i.raw >= 0 ? 'ahead' : 'behind'),
+              },
+              filter: i => i.datasetIndex === 1,
+            },
+          },
+          scales: {
+            x: { title: { display: true, text: 'Match #' }, grid: { color: '#88888822' } },
+            y: { title: { display: true, text: '+ ahead  /  − behind (min)' }, grid: { color: c => c.tick.value === 0 ? '#88888888' : '#88888822' } },
+          },
+        },
+      });
+    }
+
+    // Match table
+    let tbl = '<table class="match-table"><thead><tr><th>Match</th><th>Scheduled</th><th>Actual</th><th>Δ Schedule</th><th>Cycle Time</th></tr></thead><tbody>';
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (r.isPostBreak && i > 0) tbl += '<tr class="break-row"><td colspan="5">— break —</td></tr>';
+      const d = fmtDeltaObj(r.delta);
+      const outlierCls = r.isOutlier ? ' outlier-row' : '';
+      tbl += `<tr class="${outlierCls}">
+        <td><strong>Q${r.matchNum}</strong></td>
+        <td class="muted-cell">${fmtTime(r.scheduled)}</td>
+        <td>${r.actual ? fmtTime(r.actual) : '<span class="muted-cell">not played</span>'}</td>
+        <td class="${d.cls}">${d.text}</td>
+        <td class="${r.cycleTime == null ? 'muted-cell' : ''}">${fmtDur(r.cycleTime)}${r.isOutlier ? '<span class="outlier-badge">(outlier)</span>' : ''}</td>
+      </tr>`;
+    }
+    tbl += '</tbody></table>';
+    document.getElementById('evt-table').innerHTML = tbl;
+    document.getElementById('evt-results').classList.remove('hidden');
+  } catch (e) {
+    statusEl.style.color = 'var(--error)';
+    statusEl.textContent = 'Error: ' + e.message;
+  }
+}
+
+window.navigateEvent = function() {
+  const v = document.getElementById('eventCode')?.value?.trim().toLowerCase();
+  if (v) location.hash = '#event/' + v;
+};
+
+// ── VIEW: Week aggregate ──────────────────────────────────────────────────────
+async function viewWeek(weekNum) {
+  if (!weekNum) return viewHome();
+  document.title = `Week ${weekNum} – FRC 2026 Cycle Times`;
+  setApp(`<a href="#home" class="back-btn">← All Events</a>
+    <div class="loading">Loading Week ${weekNum} events… <span id="load-progress"></span></div>`);
+  try {
+    const events = await fetchEvents();
+    const weekEvents = events.filter(e => (e.week ?? -1) + 1 === weekNum);
+    if (!weekEvents.length) throw new Error('No events found for Week ' + weekNum);
+    const allRows = await fetchManyEvents(weekEvents, (d, t) => {
+      const el = document.getElementById('load-progress');
+      if (el) el.textContent = `(${d}/${t})`;
+    });
+    const dates = weekEvents.map(e => e.start_date).filter(Boolean).sort();
+    const dateStr = dates.length
+      ? fmtDate(dates[0]) + (dates[dates.length-1] !== dates[0] ? ' – ' + fmtDate(dates[dates.length-1]) : '')
+      : '';
+    renderAggregatePage(`Week ${weekNum}`, dateStr, '#home', weekEvents, allRows, 'per-event');
+  } catch (e) {
+    setApp(`<a href="#home" class="back-btn">← All Events</a><div class="error">Error: ${e.message}</div>`);
+  }
+}
+
+// ── VIEW: Overall season ──────────────────────────────────────────────────────
+async function viewOverall() {
+  document.title = '2026 Season – FRC Cycle Times';
+  setApp(`<a href="#home" class="back-btn">← All Events</a>
+    <div class="loading">Loading all 2026 events… <span id="load-progress"></span></div>`);
+  try {
+    const events = await fetchEvents();
+    const allRows = await fetchManyEvents(events, (d, t) => {
+      const el = document.getElementById('load-progress');
+      if (el) el.textContent = `(${d}/${t})`;
+    });
+    renderAggregatePage('2026 Season', 'All districts & regionals', '#home', events, allRows, 'per-week');
+  } catch (e) {
+    setApp(`<a href="#home" class="back-btn">← All Events</a><div class="error">Error: ${e.message}</div>`);
+  }
+}
+
+// ── Shared aggregate renderer ─────────────────────────────────────────────────
+function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaChartMode) {
+  const pooledCts = [], pooledDs = [];
+  for (const rows of allRows) {
+    if (!rows) continue;
+    pooledCts.push(...cycleTimes(rows));
+    pooledDs.push(...deltas(rows));
+  }
+
+  const eventsWithData = events.filter((_, i) => allRows[i] && cycleTimes(allRows[i]).length > 0);
+  const totalMatches   = allRows.reduce((s, r) => s + (r ? r.filter(x => x.actual).length : 0), 0);
+
+  let html = `
+    <a href="${backHref}" class="back-btn">← ${backHref === '#home' ? 'All Events' : 'Back'}</a>
+    <div class="page-title">${title}</div>
+    <p class="page-sub">${subtitle}${totalMatches ? ` · ${totalMatches.toLocaleString()} matches played` : ''}</p>
+    <div class="card">
+      <h2>Cycle Time Statistics</h2>
+      <div class="stats-grid">${renderStats(pooledCts, pooledDs)}</div>
+    </div>
+    <div class="charts-grid">
+      <div class="card"><h2>Distribution</h2><div class="chart-wrap"><canvas id="agg-dist"></canvas></div></div>
+      <div class="card"><h2>${deltaChartMode === 'per-week' ? 'Avg Δ Schedule by Week' : 'Avg Δ Schedule by Event'}</h2>
+        <div class="chart-wrap${deltaChartMode === 'per-event' && eventsWithData.length > 8 ? '-tall" style="height:' + (eventsWithData.length * 28 + 40) + 'px' : ''}"">
+          <canvas id="agg-delta"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>By Event</h2>
+      <div class="table-wrap">${renderAggTable(events, allRows)}</div>
+    </div>`;
+  setApp(html);
+
+  // Distribution chart
+  if (pooledCts.length) mkChart('agg-dist', distChartConfig(pooledCts));
+
+  // Delta bar chart
+  if (deltaChartMode === 'per-event') {
+    renderPerEventDeltaChart(eventsWithData, events, allRows);
+  } else {
+    renderPerWeekDeltaChart(events, allRows);
+  }
+}
+
+function renderPerEventDeltaChart(eventsWithData, allEvents, allRows) {
+  const labels = [], data = [], colors = [];
+  for (const e of eventsWithData) {
+    const idx  = allEvents.indexOf(e);
+    const ds   = deltas(allRows[idx]);
+    if (!ds.length) continue;
+    const avg  = mean(ds) / 60;
+    labels.push(e.name.replace(/\s*\d{4}\s*/, '').trim().slice(0, 28));
+    data.push(+avg.toFixed(2));
+    colors.push(avg >= 0 ? '#10b981b3' : '#ef4444b3');
+  }
+  if (!labels.length) return;
+  mkChart('agg-delta', {
+    type: 'bar',
+    data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: colors.map(c => c.replace('b3','')), borderWidth: 1 }] },
+    options: {
+      indexAxis: 'y',
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: i => (i.raw >= 0 ? '+' : '') + i.raw.toFixed(2) + ' min avg' } } },
+      scales: {
+        x: { title: { display: true, text: '+ ahead  /  − behind (min)' }, grid: { color: c => c.tick.value === 0 ? '#88888888' : '#88888822' } },
+        y: { ticks: { font: { size: 11 } }, grid: { display: false } },
+      },
+    },
+  });
+}
+
+function renderPerWeekDeltaChart(events, allRows) {
+  const byWeek = {};
+  events.forEach((e, i) => {
+    const wk = e.week != null ? e.week + 1 : 'other';
+    if (!byWeek[wk]) byWeek[wk] = [];
+    const ds = deltas(allRows[i]);
+    byWeek[wk].push(...ds);
+  });
+  const weeks = Object.keys(byWeek).sort((a, b) => {
+    if (a === 'other') return 1; if (b === 'other') return -1; return a - b;
+  });
+  const labels = weeks.map(w => w === 'other' ? 'Other' : `Week ${w}`);
+  const data   = weeks.map(w => byWeek[w].length ? +(mean(byWeek[w]) / 60).toFixed(2) : null);
+  const colors = data.map(d => d == null ? '#88888866' : d >= 0 ? '#10b981b3' : '#ef4444b3');
+  mkChart('agg-delta', {
+    type: 'bar',
+    data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: colors.map(c => c.replace('b3','')), borderWidth: 1 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: i => i.raw == null ? 'No data' : (i.raw >= 0 ? '+' : '') + i.raw.toFixed(2) + ' min avg' } } },
+      scales: {
+        x: { grid: { display: false } },
+        y: { title: { display: true, text: '+ ahead  /  − behind (min)' }, grid: { color: c => c.tick.value === 0 ? '#88888888' : '#88888822' } },
+      },
+    },
+  });
+}
+
+function renderAggTable(events, allRows) {
+  let html = '<table class="agg-table"><thead><tr><th>Event</th><th>Location</th><th>Matches</th><th>Mean CT</th><th>Median CT</th><th>Std Dev</th><th>Avg Δ Sched</th></tr></thead><tbody>';
+  for (let i = 0; i < events.length; i++) {
+    const e   = events[i];
+    const cts = cycleTimes(allRows[i]);
+    const ds  = deltas(allRows[i]);
+    const played = allRows[i] ? allRows[i].filter(r => r.actual).length : 0;
+    const avgD = ds.length ? fmtDeltaObj(mean(ds)) : { text: '—', cls: '' };
+    html += `<tr>
+      <td><a href="#event/${e.key}">${e.name}</a></td>
+      <td class="muted-cell">${[e.city, e.state_prov].filter(Boolean).join(', ')}</td>
+      <td class="muted-cell">${played || '—'}</td>
+      <td>${cts.length ? fmtDur(mean(cts)) : '—'}</td>
+      <td>${cts.length ? fmtDur(median(cts)) : '—'}</td>
+      <td>${cts.length ? fmtDur(stddev(cts)) : '—'}</td>
+      <td class="${avgD.cls}">${avgD.text}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  return html;
+}
+
+// ── Typeahead ─────────────────────────────────────────────────────────────────
+let searchIndex = null, taActive = -1;
+
+async function ensureSearchIndex() {
+  if (searchIndex !== null) return;
+  try {
+    const r = await fetch('https://www.thebluealliance.com/api/v3/search_index', TBA_HEADERS);
+    const data = await r.json();
+    searchIndex = (data.events || [])
+      .filter(e => e.key && e.key.startsWith('2026'))
+      .sort((a, b) => b.key.localeCompare(a.key));
+  } catch { searchIndex = []; }
+}
+
+function showTypeahead(q) {
+  const dd = document.getElementById('typeaheadDropdown');
+  if (!dd) return;
+  if (!q || !searchIndex) { dd.classList.add('hidden'); return; }
+  const ql = q.toLowerCase();
+  const hits = searchIndex.filter(e => e.key.includes(ql) || (e.value||'').toLowerCase().includes(ql)).slice(0, 12);
+  if (!hits.length) { dd.classList.add('hidden'); return; }
+  dd.innerHTML = hits.map((e, idx) =>
+    `<div class="typeahead-item" data-key="${e.key}" data-idx="${idx}">
+      <span class="typeahead-key">${e.key}</span><span class="typeahead-name">${e.value||''}</span>
+    </div>`).join('');
+  dd.querySelectorAll('.typeahead-item').forEach(el => {
+    el.addEventListener('mousedown', () => {
+      const inp = document.getElementById('eventCode');
+      if (inp) inp.value = el.dataset.key;
+      dd.classList.add('hidden');
+    });
+  });
+  taActive = -1;
+  dd.classList.remove('hidden');
+}
+
+function initTypeahead() {
+  const inp = document.getElementById('eventCode');
+  const dd  = document.getElementById('typeaheadDropdown');
+  if (!inp || !dd) return;
+  inp.addEventListener('focus',  () => ensureSearchIndex());
+  inp.addEventListener('input',  () => { taActive = -1; showTypeahead(inp.value.trim()); });
+  inp.addEventListener('keydown', e => {
+    const items = dd.querySelectorAll('.typeahead-item');
+    if (e.key === 'ArrowDown') {
+      e.preventDefault(); taActive = Math.min(taActive + 1, items.length - 1);
+      items.forEach((el, i) => el.classList.toggle('active', i === taActive));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault(); taActive = Math.max(taActive - 1, -1);
+      items.forEach((el, i) => el.classList.toggle('active', i === taActive));
+    } else if (e.key === 'Enter') {
+      if (taActive >= 0 && items[taActive]) {
+        inp.value = items[taActive].dataset.key;
+        dd.classList.add('hidden');
+      } else { navigateEvent(); }
+    } else if (e.key === 'Escape') { dd.classList.add('hidden'); }
+  });
+  document.addEventListener('click', ev => {
+    if (inp && dd && !inp.contains(ev.target) && !dd.contains(ev.target)) dd.classList.add('hidden');
+  });
+}
+</script>
+</body>
+</html>
