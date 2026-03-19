@@ -212,10 +212,15 @@ function processMatches(data) {
   const quals = data.filter(m => m.comp_level === 'qm').sort((a, b) => a.match_number - b.match_number);
   const rows = quals.map((m, i) => {
     let cycleTime = null, isPostBreak = (i === 0);
-    if (i > 0 && m.actual_time && quals[i - 1].actual_time) {
-      const gap = m.actual_time - quals[i - 1].actual_time;
-      if (gap > BREAK_GAP) isPostBreak = true;
-      else cycleTime = gap;
+    if (i > 0) {
+      // Use scheduled times to detect breaks — actual times can have large gaps
+      // due to delays or replays that aren't real breaks in the schedule
+      const schedGap = (m.time && quals[i - 1].time) ? m.time - quals[i - 1].time : null;
+      if (schedGap != null && schedGap > BREAK_GAP) {
+        isPostBreak = true;
+      } else if (m.actual_time && quals[i - 1].actual_time) {
+        cycleTime = m.actual_time - quals[i - 1].actual_time;
+      }
     }
     const delta = (m.time && m.actual_time) ? m.time - m.actual_time : null;
     return { matchNum: m.match_number, scheduled: m.time, actual: m.actual_time, cycleTime, isPostBreak, delta, isOutlier: false };
