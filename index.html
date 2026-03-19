@@ -115,6 +115,11 @@ button.btn-primary { border: none; }
 /* ── Aggregate event table ────────────────────────────────────────────────── */
 .agg-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 .agg-table th { text-align: left; padding: 6px 10px; border-bottom: 2px solid var(--border); color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
+.agg-table th.sortable { cursor: pointer; user-select: none; }
+.agg-table th.sortable:hover { color: var(--text); }
+.agg-table th.sort-active { color: var(--accent); }
+.agg-table th .sort-icon { margin-left: 4px; opacity: 0.5; font-style: normal; }
+.agg-table th.sort-active .sort-icon { opacity: 1; }
 .agg-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
 .agg-table tr:last-child td { border-bottom: none; }
 .agg-table tr:hover td { background: rgba(59,130,246,0.04); }
@@ -632,7 +637,7 @@ async function viewOverall() {
 
 // ── Shared aggregate renderer ─────────────────────────────────────────────────
 function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaChartMode) {
-  aggState = { events, allRows, excluded: new Set(), deltaChartMode };
+  aggState = { events, allRows, excluded: new Set(), deltaChartMode, sortCol: null, sortDir: 'asc' };
 
   function pooled() {
     const cts = [], ds = [], schedCts = [];
@@ -667,7 +672,7 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
     </div>
     <div class="card">
       <h2>By Event</h2>
-      <div class="table-wrap" id="agg-table-wrap">${renderAggTable(events, allRows, aggState.excluded)}</div>
+      <div class="table-wrap" id="agg-table-wrap">${renderAggTable(events, allRows, aggState.excluded, aggState.sortCol, aggState.sortDir)}</div>
     </div>`;
   setApp(html);
 
@@ -687,6 +692,8 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
     const withData = aggState.events.filter((_, i) => !aggState.excluded.has(i) && allRows[i] && cycleTimes(allRows[i]).length > 0);
     if (aggState.deltaChartMode === 'per-event') renderPerEventDeltaChart(withData, aggState.events, allRows);
     else renderPerWeekDeltaChart(aggState.events, allRows);
+    const wrap = document.getElementById('agg-table-wrap');
+    if (wrap) wrap.innerHTML = renderAggTable(aggState.events, aggState.allRows, aggState.excluded, aggState.sortCol, aggState.sortDir);
   };
 }
 
@@ -749,16 +756,73 @@ window.toggleAggEvent = function(idx) {
   if (!aggState) return;
   if (aggState.excluded.has(idx)) aggState.excluded.delete(idx);
   else aggState.excluded.add(idx);
-  // Update row style in-place without re-rendering the table
   const row = document.querySelector(`#agg-table-wrap tr[data-idx="${idx}"]`);
   if (row) row.classList.toggle('agg-excluded', aggState.excluded.has(idx));
   aggState.redraw();
 };
 
-function renderAggTable(events, allRows, excluded) {
+window.sortAggTable = function(col) {
+  if (!aggState) return;
+  if (aggState.sortCol === col) {
+    aggState.sortDir = aggState.sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    aggState.sortCol = col;
+    aggState.sortDir = 'asc';
+  }
+  const wrap = document.getElementById('agg-table-wrap');
+  if (wrap) wrap.innerHTML = renderAggTable(aggState.events, aggState.allRows, aggState.excluded, aggState.sortCol, aggState.sortDir);
+};
+
+function aggSortVal(events, allRows, col, i) {
+  const e = events[i], rows = allRows[i];
+  switch (col) {
+    case 1: return e.week ?? 999;
+    case 2: return e.name;
+    case 3: return [e.city, e.state_prov].filter(Boolean).join(', ');
+    case 4: return rows ? rows.filter(r => r.actual).length : 0;
+    case 5: { const s = scheduledCycleTimes(rows); return s.length ? mean(s) : Infinity; }
+    case 6: { const c = cycleTimes(rows); return c.length ? mean(c) : Infinity; }
+    case 7: { const c = cycleTimes(rows); return c.length ? median(c) : Infinity; }
+    case 8: { const c = cycleTimes(rows); return c.length ? stddev(c) : Infinity; }
+    case 9: { const d = deltas(rows); return d.length ? mean(d) : Infinity; }
+    default: return i;
+  }
+}
+
+function renderAggTable(events, allRows, excluded, sortCol, sortDir) {
   excluded = excluded || new Set();
-  let html = '<table class="agg-table"><thead><tr><th></th><th>Week</th><th>Event</th><th>Location</th><th>Matches</th><th>Avg Sched CT</th><th>Mean CT</th><th>Median CT</th><th>Std Dev</th><th>Avg Δ Sched</th></tr></thead><tbody>';
-  for (let i = 0; i < events.length; i++) {
+  const cols = [
+    { label: '',           sortable: false },
+    { label: 'Week',       sortable: true  },
+    { label: 'Event',      sortable: true  },
+    { label: 'Location',   sortable: true  },
+    { label: 'Matches',    sortable: true  },
+    { label: 'Avg Sched CT', sortable: true },
+    { label: 'Mean CT',    sortable: true  },
+    { label: 'Median CT',  sortable: true  },
+    { label: 'Std Dev',    sortable: true  },
+    { label: 'Avg Δ Sched', sortable: true },
+  ];
+  const headCells = cols.map((c, ci) => {
+    if (!c.sortable) return '<th></th>';
+    const active = sortCol === ci;
+    const icon = active ? (sortDir === 'asc' ? '▲' : '▼') : '▲';
+    return `<th class="sortable${active ? ' sort-active' : ''}" onclick="sortAggTable(${ci})">${c.label}<i class="sort-icon">${icon}</i></th>`;
+  }).join('');
+
+  // Compute sorted order
+  const indices = Array.from({ length: events.length }, (_, i) => i);
+  if (sortCol != null) {
+    indices.sort((a, b) => {
+      const va = aggSortVal(events, allRows, sortCol, a);
+      const vb = aggSortVal(events, allRows, sortCol, b);
+      const cmp = typeof va === 'string' ? va.localeCompare(vb) : va - vb;
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }
+
+  let html = `<table class="agg-table"><thead><tr>${headCells}</tr></thead><tbody>`;
+  for (const i of indices) {
     const e        = events[i];
     const cts      = cycleTimes(allRows[i]);
     const ds       = deltas(allRows[i]);
@@ -767,7 +831,7 @@ function renderAggTable(events, allRows, excluded) {
     const avgD     = ds.length ? fmtDeltaObj(mean(ds)) : { text: '—', cls: '' };
     const wk       = e.week != null ? `<a href="#week/${e.week + 1}" style="color:var(--accent);text-decoration:none">Wk ${e.week + 1}</a>` : '—';
     const excCls   = excluded.has(i) ? ' agg-excluded' : '';
-    html += `<tr data-idx="${i}" class="${excCls}">
+    html += `<tr data-idx="${i}"${excCls ? ` class="${excCls}"` : ''}>
       <td><input type="checkbox" ${excluded.has(i) ? '' : 'checked'} onchange="toggleAggEvent(${i})" title="Include in aggregate"></td>
       <td class="muted-cell">${wk}</td>
       <td><a href="#event/${e.key}">${e.name}</a></td>
