@@ -793,7 +793,12 @@ function renderEventResults(rows) {
   document.getElementById('evt-results').classList.remove('hidden');
 
   const lastEl = document.getElementById('evt-last-updated');
-  if (lastEl) lastEl.textContent = 'Updated ' + new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+  if (lastEl) {
+    const playedNums = rows.filter(r => r.actual).map(r => r.matchNum);
+    const lastMatch  = playedNums.length ? ` · Q${Math.max(...playedNums)} played` : '';
+    const now = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+    lastEl.textContent = `Updated ${now}${lastMatch}`;
+  }
 }
 
 async function viewEvent(code) {
