@@ -51,6 +51,29 @@ p.subtitle { color: var(--muted); font-size: 0.875rem; margin-bottom: 20px; }
 .back-btn:hover { text-decoration: underline; }
 button.btn-primary { border: none; }
 
+/* ── Live filter button ──────────────────────────────────────────────────────*/
+.btn-live {
+  display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px;
+  background: none; color: var(--success); border: 1px solid var(--success);
+  border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer; text-decoration: none;
+  transition: background 0.15s;
+}
+.btn-live:hover  { background: rgba(16,185,129,0.08); }
+.btn-live.active { background: rgba(16,185,129,0.15); }
+.live-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--success);
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.75); }
+}
+.refresh-spinner {
+  width: 10px; height: 10px; border: 1.5px solid var(--muted); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.7s linear infinite; display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* ── Stats ────────────────────────────────────────────────────────────────── */
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; }
 .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; text-align: center; }
@@ -83,6 +106,29 @@ button.btn-primary { border: none; }
 .status-done     { background: rgba(107,114,128,0.12); color: var(--muted); }
 .status-live     { background: rgba(16,185,129,0.15);  color: var(--success); }
 .status-upcoming { background: transparent; color: var(--muted); font-weight: 400; }
+
+/* ── Live event inline stats ────────────────────────────────────────────────*/
+.live-ct-stats {
+  display: flex; gap: 14px; align-items: center; margin-top: 5px; flex-wrap: wrap;
+}
+.live-ct-item {
+  display: flex; flex-direction: column; gap: 1px;
+}
+.live-ct-value {
+  font-size: 0.85rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text);
+}
+.live-ct-label {
+  font-size: 0.68rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em;
+}
+.live-no-data {
+  font-size: 0.78rem; color: var(--muted); font-style: italic; margin-top: 4px;
+}
+.live-loading {
+  font-size: 0.78rem; color: var(--muted); margin-top: 4px; display: flex; align-items: center; gap: 5px;
+}
+.ct-ok      { color: var(--success); }
+.ct-warning { color: var(--warning); }
+.ct-danger  { color: var(--error); }
 
 /* ── Event input (event view) ─────────────────────────────────────────────── */
 .input-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
@@ -151,13 +197,17 @@ button.btn-primary { border: none; }
 const TBA_KEY    = 'OgkQlossATyHZij8FEAKl0opKiW63fDDSf7Fcwnr9jcJON5XwiGHgmCVZvjFb1Lv';
 const BREAK_GAP  = 15 * 60; // seconds — gaps larger than this are breaks
 const BUCKET_SEC = 30;       // distribution bucket width in seconds
+const LIVE_REFRESH_MS = 60 * 1000; // 60 seconds
 
 // ── Shared state ─────────────────────────────────────────────────────────────
 let eventsCache  = null;          // all 2026 district/regional events
 let matchesCache = {};            // eventKey → processed rows
 let activeCharts = {};            // chartId → Chart instance
 let aggState     = null;          // current aggregate page state (for exclusion toggles)
-let refreshTimer = null;          // auto-refresh interval for live event pages
+let refreshTimer     = null;      // auto-refresh interval for event/week detail pages
+let liveFilterActive = false;     // whether "live events only" filter is on
+let liveRefreshTimer = null;      // interval handle for auto-refresh
+let liveCtCache  = {};            // eventKey → { overall, recent, label, loadedAt }
 
 // ── Router ───────────────────────────────────────────────────────────────────
 window.addEventListener('hashchange', route);
@@ -170,6 +220,7 @@ function route() {
   const param = parts.slice(1).join('/');
   if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
   destroyCharts();
+  stopLiveRefresh();
   if (!page || page === 'home') return viewHome();
   if (page === 'event')   return viewEvent(param);
   if (page === 'week')    return viewWeek(parseInt(param, 10));
@@ -203,8 +254,8 @@ async function fetchEvents() {
   return eventsCache;
 }
 
-async function fetchEventRows(code) {
-  if (matchesCache[code]) return matchesCache[code];
+async function fetchEventRows(code, bustCache) {
+  if (!bustCache && matchesCache[code]) return matchesCache[code];
   const r = await fetch(tbaUrl(`/api/v3/event/${code}/matches`));
   if (!r.ok) return null;
   const rows = processMatches(await r.json());
@@ -226,8 +277,6 @@ function processMatches(data) {
   const rows = quals.map((m, i) => {
     let cycleTime = null, scheduledCT = null, isPostBreak = (i === 0);
     if (i > 0) {
-      // Use scheduled times to detect breaks — actual times can have large gaps
-      // due to delays or replays that aren't real breaks in the schedule
       const schedGap = (m.time && quals[i - 1].time) ? m.time - quals[i - 1].time : null;
       if (schedGap != null && schedGap > BREAK_GAP) {
         isPostBreak = true;
@@ -239,13 +288,11 @@ function processMatches(data) {
       }
     }
     const delta = (m.time && m.actual_time) ? m.time - m.actual_time : null;
-    // If actual date differs from scheduled date, the match was pushed to another day — discard timing data
     const crossDay = m.time && m.actual_time &&
       new Date(m.time * 1000).toISOString().slice(0, 10) !== new Date(m.actual_time * 1000).toISOString().slice(0, 10);
     if (crossDay) { cycleTime = null; }
     return { matchNum: m.match_number, scheduled: m.time, actual: m.actual_time, cycleTime, scheduledCT, isPostBreak, delta: crossDay ? null : delta, isOutlier: crossDay };
   });
-  // Mark IQR outliers (replays, data oddities) — don't include in stats or charts
   const rawCts = rows.map(r => r.cycleTime).filter(v => v != null);
   const { lo, hi } = iqrOutlierBounds(rawCts);
   for (const r of rows) {
@@ -292,6 +339,236 @@ function scheduledCycleTimes(rows) {
   return out;
 }
 function deltas(rows)     { return (rows || []).filter(r => r.delta != null).map(r => r.delta); }
+
+// ── Live CT computation ──────────────────────────────────────────────────────
+// Returns { overall, recent, recentMatchN, recentGapN } from already-processed rows
+// overall = mean of all cycle times
+// recent  = mean of gaps between the last MATCH_WINDOW played matches
+//           e.g. last 5 played matches -> up to 4 gaps
+function computeLiveCts(rows) {
+  const allCts = cycleTimes(rows);
+  if (!allCts.length) return null;
+  const overall = mean(allCts);
+
+  const MATCH_WINDOW = 5;
+  // Find the last MATCH_WINDOW rows that have actually been played
+  const playedRows = (rows || []).filter(r => r.actual != null);
+  const windowRows = playedRows.slice(-MATCH_WINDOW);
+
+  // Compute gaps between consecutive rows in that window, skipping post-break
+  // boundaries and outliers
+  const recentCts = [];
+  for (let i = 1; i < windowRows.length; i++) {
+    const r = windowRows[i];
+    if (r.isPostBreak || r.cycleTime == null || r.isOutlier) continue;
+    recentCts.push(r.cycleTime);
+  }
+
+  const recent = recentCts.length ? mean(recentCts) : null;
+
+  // Walk backwards through played rows to find the most recent scheduled gap
+  // that looks like a real CT (<=15 min). This skips post-break rows and any
+  // anomalous gaps from early in the day before the rhythm settled.
+  let scheduledAvg = null;
+  for (let i = playedRows.length - 1; i >= 1; i--) {
+    const r = playedRows[i];
+    if (r.isPostBreak || r.scheduledCT == null) continue;
+    if (r.scheduledCT > 0 && r.scheduledCT <= BREAK_GAP) { scheduledAvg = r.scheduledCT; break; }
+  }
+
+  return { overall, recent, recentMatchN: windowRows.length, recentGapN: recentCts.length, scheduledAvg };
+}
+
+// ── Live event data loading ──────────────────────────────────────────────────
+// Fetches (or returns cached) live CT data for a single event
+async function getLiveCtData(eventKey, bustCache) {
+  const cacheAge = liveCtCache[eventKey]?.loadedAt;
+  if (!bustCache && cacheAge && Date.now() - cacheAge < LIVE_REFRESH_MS - 5000) {
+    return liveCtCache[eventKey];
+  }
+  const rows = await fetchEventRows(eventKey, bustCache);
+  const ct   = computeLiveCts(rows);
+  const result = { ct, loadedAt: Date.now() };
+  liveCtCache[eventKey] = result;
+  return result;
+}
+
+// ── Live filter / refresh logic ──────────────────────────────────────────────
+function stopLiveRefresh() {
+  if (liveRefreshTimer) { clearInterval(liveRefreshTimer); liveRefreshTimer = null; }
+}
+
+window.toggleLiveFilter = function() {
+  liveFilterActive = !liveFilterActive;
+  const btn = document.getElementById('liveFilterBtn');
+  if (btn) {
+    btn.classList.toggle('active', liveFilterActive);
+    const today = new Date().toISOString().slice(0, 10);
+    const liveCount = (eventsCache || []).filter(e => e.start_date <= today && e.end_date >= today).length;
+    btn.innerHTML = liveFilterActive
+      ? `<span class="live-dot"></span> Show All Events`
+      : `<span class="live-dot"></span> Live Events (${liveCount})`;
+  }
+  rerenderHomeEventLists();
+  if (liveFilterActive) {
+    liveRefreshTimer = setInterval(refreshLiveCtStats, LIVE_REFRESH_MS);
+  } else {
+    stopLiveRefresh();
+  }
+};
+
+async function refreshLiveCtStats() {
+  // Only refresh if we're still on the home view
+  if (!document.getElementById('liveFilterBtn')) { stopLiveRefresh(); return; }
+  const events = eventsCache;
+  if (!events) return;
+  const liveEvents = events.filter(e => {
+    const today = new Date().toISOString().slice(0, 10);
+    return e.start_date <= today && e.end_date >= today;
+  });
+  // Show spinner
+  const indicator = document.getElementById('refreshIndicator');
+  if (indicator) indicator.innerHTML = '<span class="refresh-spinner"></span> Refreshing…';
+  await Promise.all(liveEvents.map(e => getLiveCtData(e.key, true)));
+  rerenderHomeEventLists();
+  if (indicator) {
+    const now = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
+    indicator.innerHTML = `Updated ${now}`;
+  }
+}
+
+// Re-render just the event list sections without rebuilding the whole page
+function rerenderHomeEventLists() {
+  const container = document.getElementById('eventListsContainer');
+  if (!container || !eventsCache) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const events = eventsCache;
+
+  const byWeek = {};
+  for (const e of events) {
+    const w = e.week != null ? e.week : 'other';
+    (byWeek[w] = byWeek[w] || []).push(e);
+  }
+  const weekKeys = Object.keys(byWeek).sort((a, b) => {
+    if (a === 'other') return 1; if (b === 'other') return -1;
+    return Number(a) - Number(b);
+  });
+
+  let html = '';
+  for (const wk of weekKeys) {
+    const weekNum = wk === 'other' ? null : Number(wk) + 1;
+    const label   = weekNum ? `Week ${weekNum}` : 'Other';
+    const evts    = byWeek[wk];
+
+    const visibleEvts = liveFilterActive
+      ? evts.filter(e => e.start_date <= today && e.end_date >= today)
+      : evts;
+    if (!visibleEvts.length) continue;
+
+    const dates   = evts.map(e => e.start_date).filter(Boolean).sort();
+    const dateStr = dates.length
+      ? fmtDate(dates[0]) + (dates[dates.length - 1] !== dates[0] ? ' – ' + fmtDate(dates[dates.length - 1]) : '')
+      : '';
+
+    html += `<div class="week-section">
+      <div class="week-header">
+        <div>
+          <span class="week-label">${label}</span>
+          ${dateStr ? `<span class="week-dates">${dateStr}</span>` : ''}
+        </div>
+        ${weekNum != null ? `<a href="#week/${weekNum}" class="btn-secondary">View Week Aggregate →</a>` : ''}
+      </div>
+      <div class="event-list">`;
+
+    // Within live-filter view, sort events with no CT data to the bottom —
+    // but only once all visible events have finished loading (avoids jumpy reorder).
+    const allLoaded = visibleEvts.every(e => liveCtCache[e.key] !== undefined);
+    const sortedEvts = (liveFilterActive && allLoaded) ? [
+      ...visibleEvts.filter(e => liveCtCache[e.key]?.ct != null),
+      ...visibleEvts.filter(e => !liveCtCache[e.key]?.ct),
+    ] : visibleEvts;
+
+    for (const e of sortedEvts) {
+      const st      = eventStatus(e);
+      const isLive  = e.start_date <= today && e.end_date >= today;
+      const cached  = isLive ? liveCtCache[e.key] : null;
+      let liveBlock = '';
+
+      if (isLive) {
+        if (!cached) {
+          // Data not loaded yet — show a loading stub and kick off a load
+          liveBlock = `<div class="live-loading" id="livect-${e.key}"><span class="refresh-spinner"></span> Loading…</div>`;
+          // Kick off load and patch DOM when done (fire-and-forget)
+          getLiveCtData(e.key, false).then(data => {
+            const el = document.getElementById(`livect-${e.key}`);
+            if (el) el.outerHTML = buildLiveCtBlock(data);
+          }).catch(() => {
+            const el = document.getElementById(`livect-${e.key}`);
+            if (el) el.outerHTML = `<div class="live-no-data">Unable to load data</div>`;
+          });
+        } else {
+          liveBlock = buildLiveCtBlock(cached);
+        }
+      }
+
+      html += `<div class="event-row">
+        <div class="event-row-info">
+          <span class="event-row-name">${e.name} <span style="color:var(--muted);font-weight:400">(${e.key})</span></span>
+          <span class="event-row-loc">${[e.city, e.state_prov].filter(Boolean).join(', ')}</span>
+          ${liveBlock}
+        </div>
+        <div class="event-row-right">
+          <span class="event-status ${st.cls}">${st.label}</span>
+          <a href="#event/${e.key}" class="btn-ghost">View →</a>
+        </div>
+      </div>`;
+    }
+    html += `</div></div>`;
+  }
+  container.innerHTML = html;
+}
+
+const ICON_OK      = `<svg width="13" height="13" viewBox="0 0 13 13" style="vertical-align:-1px;margin-right:2px" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="6.5" cy="6.5" r="5.5" fill="#10B981"/><polyline points="3.5,6.5 5.5,8.5 9.5,4.5" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const ICON_WARNING = `<svg width="13" height="13" viewBox="0 0 13 13" style="vertical-align:-1px;margin-right:2px" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1.5 10.5L6.5 2.5L11.5 10.5H1.5Z" fill="#F59E0B" stroke="#F59E0B" stroke-linejoin="round"/><text x="6.5" y="10" text-anchor="middle" font-size="7" font-weight="bold" fill="white" font-family="sans-serif">!</text></svg>`;
+const ICON_DANGER  = `<svg width="13" height="13" viewBox="0 0 13 13" style="vertical-align:-1px;margin-right:2px" fill="none" xmlns="http://www.w3.org/2000/svg"><polygon points="4,1 9,1 12,4 12,9 9,12 4,12 1,9 1,4" fill="#EF4444" stroke="#EF4444" stroke-linejoin="round"/><text x="6.5" y="9.5" text-anchor="middle" font-size="7" font-weight="bold" fill="white" font-family="sans-serif">!</text></svg>`;
+
+function ctAlert(actual, scheduled) {
+  // Returns { cls, icon } based on how much actual exceeds scheduled CT.
+  // scheduled may be null if no scheduled times available.
+  if (actual == null || scheduled == null || scheduled === 0) return { cls: '', icon: '' };
+  const over = actual - scheduled;
+  if (over > 120) return { cls: 'ct-danger',  icon: ICON_DANGER };
+  if (over > 0)   return { cls: 'ct-warning', icon: ICON_WARNING };
+  return { cls: 'ct-ok', icon: ICON_OK };
+}
+
+function buildLiveCtBlock(data) {
+  if (!data || !data.ct) {
+    return `<div class="live-no-data">No qual matches yet</div>`;
+  }
+  const { ct } = data;
+
+  const matchWord    = ct.recentMatchN === 1 ? '1 match' : `${ct.recentMatchN} matches`;
+  const recentLabel  = ct.recentMatchN < 5 ? `Last ${matchWord}` : 'Last 5 matches';
+  const recentAlert  = ctAlert(ct.recent, ct.scheduledAvg);
+  const schedHtml    = ct.scheduledAvg != null
+    ? `<div class="live-ct-item">
+        <span class="live-ct-value" style="color:var(--muted)">${fmtDur(ct.scheduledAvg)}</span>
+        <span class="live-ct-label">Target CT</span>
+       </div>
+       <span style="color:var(--border);font-size:0.8rem;align-self:center">|</span>`
+    : '';
+  const recentHtml   = ct.recent != null
+    ? `<div class="live-ct-item">
+        <span class="live-ct-value ${recentAlert.cls}">${recentAlert.icon}${fmtDur(ct.recent)}</span>
+        <span class="live-ct-label">${recentLabel}</span>
+       </div>`
+    : '';
+  return `<div class="live-ct-stats">
+    ${schedHtml}
+    ${recentHtml}
+  </div>`;
+}
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 function fmtDur(s) {
@@ -381,15 +658,8 @@ async function viewHome() {
   setApp('<div class="loading">Loading events…</div>');
   try {
     const events = await fetchEvents();
-    const byWeek = {};
-    for (const e of events) {
-      const w = e.week != null ? e.week : 'other';
-      (byWeek[w] = byWeek[w] || []).push(e);
-    }
-    const weekKeys = Object.keys(byWeek).sort((a, b) => {
-      if (a === 'other') return 1; if (b === 'other') return -1;
-      return Number(a) - Number(b);
-    });
+    const today  = new Date().toISOString().slice(0, 10);
+    const liveCount = events.filter(e => e.start_date <= today && e.end_date >= today).length;
 
     let html = `
       <div class="home-header">
@@ -397,7 +667,15 @@ async function viewHome() {
           <h1>⏱ FRC 2026 Cycle Times</h1>
           <p class="subtitle">Qual match cycle time analysis · ${events.length} events</p>
         </div>
-        <a href="#overall" class="btn-primary">📊 Overall Season</a>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          ${liveCount > 0 ? `
+            <button id="liveFilterBtn" class="btn-live${liveFilterActive ? ' active' : ''}" onclick="toggleLiveFilter()">
+              <span class="live-dot"></span> ${liveFilterActive ? 'Show All Events' : `Live Events (${liveCount})`}
+            </button>
+            <span class="refresh-indicator" id="refreshIndicator"></span>
+          ` : ''}
+          <a href="#overall" class="btn-primary">📊 Overall Season</a>
+        </div>
       </div>
       <div class="card" style="margin-bottom:16px">
         <div class="input-row">
@@ -411,57 +689,40 @@ async function viewHome() {
           <div class="field" style="min-width:160px">
             <label>Jump to Week</label>
             <select id="homeWeekSelect" onchange="if(this.value) location.hash='#week/'+this.value" style="width:100%">
-              <option value="">Select week…</option>
-              ${weekKeys.filter(w => w !== 'other').map(w => {
-                const n = Number(w) + 1;
-                const evts = byWeek[w];
-                const dates = evts.map(e => e.start_date).filter(Boolean).sort();
-                const dateStr = dates.length ? ' · ' + fmtDate(dates[0]) : '';
-                return `<option value="${n}">Week ${n}${dateStr}</option>`;
-              }).join('')}
-            </select>
-          </div>
-        </div>
-      </div>`;
+              <option value="">Select week…</option>`;
 
-    for (const wk of weekKeys) {
-      const weekNum = wk === 'other' ? null : Number(wk) + 1;
-      const label   = weekNum ? `Week ${weekNum}` : 'Other';
-      const evts    = byWeek[wk];
-      const dates   = evts.map(e => e.start_date).filter(Boolean).sort();
-      const dateStr = dates.length
-        ? fmtDate(dates[0]) + (dates[dates.length - 1] !== dates[0] ? ' – ' + fmtDate(dates[dates.length - 1]) : '')
-        : '';
-
-      html += `<div class="week-section">
-        <div class="week-header">
-          <div>
-            <span class="week-label">${label}</span>
-            ${dateStr ? `<span class="week-dates">${dateStr}</span>` : ''}
-          </div>
-          ${weekNum != null ? `<a href="#week/${weekNum}" class="btn-secondary">View Week Aggregate →</a>` : ''}
-        </div>
-        <div class="event-list">`;
-
-      for (const e of evts) {
-        const st = eventStatus(e);
-        html += `<div class="event-row">
-          <div class="event-row-info">
-            <span class="event-row-name">${e.name} <span style="color:var(--muted);font-weight:400">(${e.key})</span></span>
-            <span class="event-row-loc">${[e.city, e.state_prov].filter(Boolean).join(', ')}</span>
-          </div>
-          <div class="event-row-right">
-            <span class="event-status ${st.cls}">${st.label}</span>
-            <a href="#event/${e.key}" class="btn-ghost">View →</a>
-          </div>
-        </div>`;
-      }
-      html += `</div></div>`;
+    const byWeekForSelect = {};
+    for (const e of events) {
+      const w = e.week != null ? e.week : 'other';
+      (byWeekForSelect[w] = byWeekForSelect[w] || []).push(e);
     }
+    const weekKeysForSelect = Object.keys(byWeekForSelect).sort((a, b) => {
+      if (a === 'other') return 1; if (b === 'other') return -1;
+      return Number(a) - Number(b);
+    });
+    for (const wk of weekKeysForSelect.filter(w => w !== 'other')) {
+      const n = Number(wk) + 1;
+      const evts = byWeekForSelect[wk];
+      const dates = evts.map(e => e.start_date).filter(Boolean).sort();
+      const dateStr = dates.length ? ' · ' + fmtDate(dates[0]) : '';
+      html += `<option value="${n}">Week ${n}${dateStr}</option>`;
+    }
+    html += `</select></div></div></div>
+      <div id="eventListsContainer"></div>`;
+
     setApp(html);
-    // Pre-populate searchIndex from already-loaded events, then wire up home typeahead
+
     if (!searchIndex) searchIndex = events.map(e => ({ key: e.key, value: e.name }));
     initHomeTypeahead();
+
+    // Render event lists (uses rerenderHomeEventLists for DRY)
+    rerenderHomeEventLists();
+
+    // If live filter was active before navigation, start refresh timer
+    if (liveFilterActive && liveCount > 0) {
+      liveRefreshTimer = setInterval(refreshLiveCtStats, LIVE_REFRESH_MS);
+    }
+
   } catch (e) {
     setApp(`<div class="error">Error: ${e.message}</div>`);
   }
@@ -472,7 +733,12 @@ function renderEventResults(rows) {
   const cts = cycleTimes(rows), ds = deltas(rows), schedCts = scheduledCycleTimes(rows);
   document.getElementById('evt-stats').innerHTML = renderStats(cts, ds, schedCts);
 
-  if (cts.length) mkChart('evt-dist', distChartConfig(cts));
+  if (cts.length) {
+    mkChart('evt-dist', distChartConfig(cts));
+  } else {
+    const distCard = document.getElementById('evt-dist')?.closest('.card');
+    if (distCard) distCard.innerHTML += '<p style="color:var(--muted);font-size:0.875rem;margin-top:8px">No cycle time data available yet.</p>';
+  }
 
   const schedRows = rows.filter(r => r.delta != null);
   if (schedRows.length) {
@@ -579,18 +845,19 @@ async function viewEvent(code) {
       fetch(tbaUrl(`/api/v3/event/${code}`)).then(r => r.ok ? r.json() : {}),
       fetch(tbaUrl(`/api/v3/event/${code}/teams/simple`)).then(r => r.ok ? r.json() : []),
     ]);
-    if (!rows || rows.length === 0) throw new Error('No qual matches found');
 
-    const today    = new Date().toISOString().slice(0, 10);
-    const isLive   = eventData.start_date && eventData.end_date &&
-                     eventData.start_date <= today && eventData.end_date >= today;
+    if (!rows) throw new Error('Could not load match data for this event');
+    if (rows.length === 0) throw new Error('No qualification matches found for this event yet');
+
+    const today     = new Date().toISOString().slice(0, 10);
+    const isLive    = eventData.start_date && eventData.end_date &&
+                      eventData.start_date <= today && eventData.end_date >= today;
     const teamCount = Array.isArray(teamsData) ? teamsData.length : 0;
-
-    const weekNum  = eventData.week != null ? eventData.week + 1 : null;
-    const weekLink = weekNum ? ` · <a href="#week/${weekNum}" style="color:var(--accent);text-decoration:none">All Week ${weekNum} Events →</a>` : '';
+    const weekNum   = eventData.week != null ? eventData.week + 1 : null;
+    const weekLink  = weekNum ? ` · <a href="#week/${weekNum}" style="color:var(--accent);text-decoration:none">All Week ${weekNum} Events →</a>` : '';
     const liveBadge = isLive
-      ? ' <span class="status-live" style="font-size:0.75rem;padding:2px 7px;border-radius:4px;vertical-align:middle">● Live</span>'
-        + ' <span id="evt-last-updated" style="font-size:0.75rem;color:var(--muted);margin-left:6px"></span>'
+      ? ' <span class="status-live" style="font-size:0.75rem;padding:2px 7px;border-radius:4px;vertical-align:middle">● Live</span>' +
+        ' <span id="evt-last-updated" style="font-size:0.75rem;color:var(--muted);margin-left:6px"></span>'
       : '';
 
     statusEl.textContent = '';
@@ -605,9 +872,8 @@ async function viewEvent(code) {
 
     if (isLive) {
       refreshTimer = setInterval(async () => {
-        delete matchesCache[code];
         try {
-          const fresh = await fetchEventRows(code);
+          const fresh = await fetchEventRows(code, true);
           if (fresh && fresh.length) renderEventResults(fresh);
         } catch {}
       }, 60000);
@@ -617,7 +883,6 @@ async function viewEvent(code) {
     statusEl.textContent = 'Error: ' + e.message;
   }
 }
-
 window.navigateEvent = function() {
   const v = document.getElementById('eventCode')?.value?.trim().toLowerCase();
   if (v) location.hash = '#event/' + v;
@@ -644,12 +909,11 @@ async function viewWeek(weekNum) {
     renderAggregatePage(`Week ${weekNum}`, dateStr, '#home', weekEvents, allRows, 'per-event');
 
     const today = new Date().toISOString().slice(0, 10);
-    const liveEvents = weekEvents.filter(e => e.start_date && e.end_date && e.start_date <= today && e.end_date >= today);
-    if (liveEvents.length) {
+    const liveWeekEvents = weekEvents.filter(e => e.start_date && e.end_date && e.start_date <= today && e.end_date >= today);
+    if (liveWeekEvents.length) {
       refreshTimer = setInterval(async () => {
         if (!aggState) return;
-        // Clear cache and re-fetch only the live events
-        for (const e of liveEvents) delete matchesCache[e.key];
+        for (const e of liveWeekEvents) delete matchesCache[e.key];
         const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key)));
         for (let i = 0; i < weekEvents.length; i++) aggState.allRows[i] = freshRows[i];
         aggState.redraw();
@@ -845,7 +1109,6 @@ function renderAggTable(events, allRows, excluded, sortCol, sortDir) {
   excluded = excluded || new Set();
   const today   = new Date().toISOString().slice(0, 10);
   const anyLive = events.some(e => e.start_date && e.end_date && e.start_date <= today && e.end_date >= today);
-
   const cols = [
     { label: '',             sortable: false },
     { label: 'Week',         sortable: true  },
@@ -860,13 +1123,12 @@ function renderAggTable(events, allRows, excluded, sortCol, sortDir) {
     ...(anyLive ? [{ label: 'Live Δ', sortable: true }] : []),
   ];
   const headCells = cols.map((c, ci) => {
-    if (!c.sortable) return `<th>${c.label}</th>`;
+    if (!c.sortable) return '<th></th>';
     const active = sortCol === ci;
     const icon = active ? (sortDir === 'asc' ? '▲' : '▼') : '▲';
     return `<th class="sortable${active ? ' sort-active' : ''}" onclick="sortAggTable(${ci})">${c.label}<i class="sort-icon">${icon}</i></th>`;
   }).join('');
 
-  // Compute sorted order
   const indices = Array.from({ length: events.length }, (_, i) => i);
   if (sortCol != null) {
     indices.sort((a, b) => {
@@ -887,7 +1149,6 @@ function renderAggTable(events, allRows, excluded, sortCol, sortDir) {
     const avgD     = ds.length ? fmtDeltaObj(mean(ds)) : { text: '—', cls: '' };
     const wk       = e.week != null ? `<a href="#week/${e.week + 1}" style="color:var(--accent);text-decoration:none">Wk ${e.week + 1}</a>` : '—';
     const excCls   = excluded.has(i) ? ' agg-excluded' : '';
-
     let liveCell = '';
     if (anyLive) {
       const isLive = e.start_date && e.end_date && e.start_date <= today && e.end_date >= today;
