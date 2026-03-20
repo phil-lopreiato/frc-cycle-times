@@ -385,7 +385,14 @@ function stopLiveRefresh() {
 window.toggleLiveFilter = function() {
   liveFilterActive = !liveFilterActive;
   const btn = document.getElementById('liveFilterBtn');
-  if (btn) btn.classList.toggle('active', liveFilterActive);
+  if (btn) {
+    btn.classList.toggle('active', liveFilterActive);
+    const today = new Date().toISOString().slice(0, 10);
+    const liveCount = (eventsCache || []).filter(e => e.start_date <= today && e.end_date >= today).length;
+    btn.innerHTML = liveFilterActive
+      ? `<span class="live-dot"></span> Show All Events`
+      : `<span class="live-dot"></span> Live Events (${liveCount})`;
+  }
   rerenderHomeEventLists();
   if (liveFilterActive) {
     liveRefreshTimer = setInterval(refreshLiveCtStats, LIVE_REFRESH_MS);
@@ -620,7 +627,7 @@ async function viewHome() {
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           ${liveCount > 0 ? `
             <button id="liveFilterBtn" class="btn-live${liveFilterActive ? ' active' : ''}" onclick="toggleLiveFilter()">
-              <span class="live-dot"></span> Live Events (${liveCount})
+              <span class="live-dot"></span> ${liveFilterActive ? 'Show All Events' : `Live Events (${liveCount})`}
             </button>
             <span class="refresh-indicator" id="refreshIndicator"></span>
           ` : ''}
