@@ -477,7 +477,15 @@ function rerenderHomeEventLists() {
       </div>
       <div class="event-list">`;
 
-    for (const e of visibleEvts) {
+    // Within live-filter view, sort events with no CT data to the bottom —
+    // but only once all visible events have finished loading (avoids jumpy reorder).
+    const allLoaded = visibleEvts.every(e => liveCtCache[e.key] !== undefined);
+    const sortedEvts = (liveFilterActive && allLoaded) ? [
+      ...visibleEvts.filter(e => liveCtCache[e.key]?.ct != null),
+      ...visibleEvts.filter(e => !liveCtCache[e.key]?.ct),
+    ] : visibleEvts;
+
+    for (const e of sortedEvts) {
       const st      = eventStatus(e);
       const isLive  = e.start_date <= today && e.end_date >= today;
       const cached  = isLive ? liveCtCache[e.key] : null;
