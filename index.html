@@ -642,6 +642,19 @@ async function viewWeek(weekNum) {
       ? fmtDate(dates[0]) + (dates[dates.length-1] !== dates[0] ? ' – ' + fmtDate(dates[dates.length-1]) : '')
       : '';
     renderAggregatePage(`Week ${weekNum}`, dateStr, '#home', weekEvents, allRows, 'per-event');
+
+    const today = new Date().toISOString().slice(0, 10);
+    const liveEvents = weekEvents.filter(e => e.start_date && e.end_date && e.start_date <= today && e.end_date >= today);
+    if (liveEvents.length) {
+      refreshTimer = setInterval(async () => {
+        if (!aggState) return;
+        // Clear cache and re-fetch only the live events
+        for (const e of liveEvents) delete matchesCache[e.key];
+        const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key)));
+        for (let i = 0; i < weekEvents.length; i++) aggState.allRows[i] = freshRows[i];
+        aggState.redraw();
+      }, 60000);
+    }
   } catch (e) {
     setApp(`<a href="#home" class="back-btn">← All Events</a><div class="error">Error: ${e.message}</div>`);
   }
