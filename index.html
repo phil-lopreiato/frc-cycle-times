@@ -805,14 +805,19 @@ function renderEventResults(rows) {
     liveCard.className = 'stat';
     liveCard.id = 'evt-live-ct';
     statsEl.appendChild(liveCard);
-    const avgCT = mean(cycleTimes(rows)) || null;
+    const avgCT   = mean(cycleTimes(rows)) || null;
+    const schedCT = nextUp.scheduledCT;
     function updateLiveCT() {
       const el = document.getElementById('evt-live-ct');
       if (!el) { clearInterval(cycleCTTimer); cycleCTTimer = null; return; }
       const elapsed = Math.floor(Date.now() / 1000) - lastPlayed.actual;
       const cls = avgCT && elapsed > avgCT ? 'ct-danger' : '';
+      const schedLine = schedCT != null
+        ? `<div style="font-size:0.72rem;color:var(--muted);margin-top:2px">Sched: ${fmtDur(schedCT)}</div>`
+        : '';
       el.innerHTML = `<div class="stat-value ${cls}"><span class="live-dot" style="display:inline-block;margin-right:3px;vertical-align:middle"></span>${fmtDur(elapsed)}</div>` +
-                     `<div class="stat-label">Current CT · Q${lastPlayed.matchNum}→Q${nextUp.matchNum}</div>`;
+                     `<div class="stat-label">Current CT · Q${lastPlayed.matchNum}→Q${nextUp.matchNum}</div>` +
+                     schedLine;
     }
     updateLiveCT();
     cycleCTTimer = setInterval(updateLiveCT, 1000);
