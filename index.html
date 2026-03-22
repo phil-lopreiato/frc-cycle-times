@@ -635,7 +635,7 @@ function renderStats(cts, ds, schedCts) {
     ? statCard(fmtDur(mean(schedCts)), 'Avg Scheduled CT')
     : '';
   return [
-    statCard(cts.length,           'Cycle Times'),
+    statCard(cts.length,           'Matches Played'),
     statCard(fmtDur(mean(cts)),    'Mean'),
     statCard(fmtDur(median(cts)),  'Median (P50)'),
     statCard(fmtDur(stddev(cts)),  'Std Dev'),
