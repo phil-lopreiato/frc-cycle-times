@@ -734,7 +734,7 @@ function renderStats(cts, ds, schedCts, minInfo) {
     ? (minInfo.event ? `${minInfo.match} · ${minInfo.event}` : minInfo.match)
     : null;
   return [
-    statCard(cts.length,           'Matches Played'),
+    statCard(cts.length,           'In Scope Matches'),
     statCard(fmtDur(mean(cts)),    'Mean'),
     statCard(fmtDur(median(cts)),  'Median (P50)'),
     statCard(fmtDur(stddev(cts)),  'Std Dev'),
