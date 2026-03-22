@@ -155,7 +155,8 @@ button.btn-primary { border: none; }
 .match-table td { padding: 5px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .match-table tr:last-child td { border-bottom: none; }
 .match-table tr.break-row td { text-align: center; color: var(--muted); font-style: italic; font-size: 0.78rem; padding: 3px; background: var(--bg); }
-.match-table tr:hover:not(.break-row) td { background: rgba(59,130,246,0.04); }
+.match-table tr.replay-gap-row td { text-align: center; color: var(--warning); font-style: italic; font-size: 0.78rem; padding: 3px; background: var(--bg); }
+.match-table tr:hover:not(.break-row):not(.replay-gap-row) td { background: rgba(59,130,246,0.04); }
 .match-table tr.outlier-row td { color: var(--muted); }
 .match-table tr.replay-row td { color: var(--muted); }
 .match-table tr.replay-row td:first-child { color: var(--warning); }
@@ -252,34 +253,49 @@ function mkChart(id, config) {
   activeCharts[id] = new Chart(el.getContext('2d'), config);
 }
 
-// Custom plugin: draw dashed vertical lines between data points at given 0-based indices
+// Custom plugin: draw vertical annotation lines for breaks and replay gaps
 Chart.register({
   id: 'verticalBreaks',
   afterDraw(chart) {
-    const breaks = chart.options.plugins?.verticalBreaks?.indices;
-    if (!breaks?.length) return;
+    const opts = chart.options.plugins?.verticalBreaks;
+    if (!opts) return;
     const { ctx, scales: { x, y } } = chart;
-    // Cache pixel positions for hover detection
-    chart._breakPixels = breaks.map(idx => (x.getPixelForValue(idx - 1) + x.getPixelForValue(idx + 1)) / 2);
+    chart._annotations = [];
     chart._breakYTop   = y.top;
     chart._breakYBot   = y.bottom;
-    ctx.save();
-    ctx.strokeStyle = 'rgba(136,136,136,0.55)';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([5, 4]);
-    for (const px of chart._breakPixels) {
-      ctx.beginPath();
-      ctx.moveTo(px, y.top);
-      ctx.lineTo(px, y.bottom);
-      ctx.stroke();
+
+    function drawLines(items, nullBetween, color, dash) {
+      if (!items?.length) return;
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash(dash);
+      for (const { idx, label } of items) {
+        // Breaks have a null at idx so real points are at idx-1 and idx+1;
+        // Replay gaps have no null so real points are at idx-1 and idx.
+        const px = nullBetween
+          ? (x.getPixelForValue(idx - 1) + x.getPixelForValue(idx + 1)) / 2
+          : (x.getPixelForValue(idx - 1) + x.getPixelForValue(idx))     / 2;
+        chart._annotations.push({ px, label });
+        ctx.beginPath();
+        ctx.moveTo(px, y.top);
+        ctx.lineTo(px, y.bottom);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.restore();
     }
-    ctx.setLineDash([]);
-    ctx.restore();
+
+    drawLines(
+      (opts.indices || []).map(idx => ({ idx, label: '— break —' })),
+      true, 'rgba(136,136,136,0.55)', [5, 4]
+    );
+    drawLines(opts.replayGaps || [], false, 'rgba(245,158,11,0.65)', [3, 3]);
   },
   afterEvent(chart, args) {
     const e = args.event;
-    const pixels = chart._breakPixels;
-    if (!pixels?.length) return;
+    const anns = chart._annotations;
+    if (!anns?.length) return;
     let tip = document.getElementById('_break-tip');
     if (!tip) {
       tip = document.createElement('div');
@@ -289,10 +305,10 @@ Chart.register({
     }
     if (e.type === 'mousemove') {
       const inArea = e.y >= chart._breakYTop && e.y <= chart._breakYBot;
-      const hit    = inArea && pixels.some(px => Math.abs(e.x - px) <= 8);
+      const hit    = inArea ? anns.find(a => Math.abs(e.x - a.px) <= 8) : null;
       if (hit) {
         const rect = chart.canvas.getBoundingClientRect();
-        tip.textContent = '— break —';
+        tip.textContent = hit.label;
         tip.style.left = (rect.left + e.x + 14) + 'px';
         tip.style.top  = (rect.top  + e.y - 14) + 'px';
         tip.style.display = 'block';
@@ -339,46 +355,69 @@ function iqrOutlierBounds(values) {
 
 function processMatches(data) {
   const quals = data.filter(m => m.comp_level === 'qm').sort((a, b) => a.match_number - b.match_number);
+
+  // Build rows with schedule-derived fields (delta, scheduledCT, isPostBreak based on match order)
   const rows = quals.map((m, i) => {
-    let cycleTime = null, scheduledCT = null, isPostBreak = (i === 0);
+    let scheduledCT = null, isPostBreak = (i === 0);
     if (i > 0) {
       const schedGap = (m.time && quals[i - 1].time) ? m.time - quals[i - 1].time : null;
-      if (schedGap != null && schedGap > BREAK_GAP) {
-        isPostBreak = true;
-      } else {
-        scheduledCT = schedGap;
-        if (m.actual_time && quals[i - 1].actual_time) {
-          cycleTime = m.actual_time - quals[i - 1].actual_time;
-        }
-      }
+      if (schedGap != null && schedGap > BREAK_GAP) isPostBreak = true;
+      else scheduledCT = schedGap;
     }
-    const delta = (m.time && m.actual_time) ? m.time - m.actual_time : null;
     const crossDay = m.time && m.actual_time &&
       new Date(m.time * 1000).toISOString().slice(0, 10) !== new Date(m.actual_time * 1000).toISOString().slice(0, 10);
-    if (crossDay) { cycleTime = null; }
-    return { matchNum: m.match_number, scheduled: m.time, actual: m.actual_time, cycleTime, scheduledCT, isPostBreak, delta: crossDay ? null : delta, isOutlier: crossDay };
+    const delta = (m.time && m.actual_time) ? m.time - m.actual_time : null;
+    return { matchNum: m.match_number, scheduled: m.time, actual: m.actual_time,
+             cycleTime: null, scheduledCT, isPostBreak,
+             delta: crossDay ? null : delta, isOutlier: !!crossDay, isReplay: false };
   });
-  // Detect out-of-order replays: a played match is a replay if any higher-numbered
-  // match was played earlier (actual_time of a lower match > actual_time of a higher match).
+
+  // Compute cycle times in actual play order; only override isPostBreak from actual gaps
+  // if scheduled data is unavailable (fall back), since running late inflates actual gaps.
+  const played = rows.filter(r => r.actual).sort((a, b) => a.actual - b.actual);
+  if (played.length > 0) played[0].cycleTime = null; // first played has no predecessor
+  for (let i = 1; i < played.length; i++) {
+    const gap = played[i].actual - played[i - 1].actual;
+    // Only use actual gap as a break indicator when there's no schedule to rely on
+    if (!played[i].scheduled || !played[i - 1].scheduled) {
+      if (gap > BREAK_GAP) {
+        played[i].isPostBreak = true;
+      } else {
+        played[i].cycleTime = gap;
+        played[i].isPostBreak = false;
+      }
+    } else {
+      // Schedule-derived isPostBreak already set; just fill in cycle time for non-breaks
+      if (!played[i].isPostBreak) {
+        played[i].cycleTime = gap;
+      }
+    }
+  }
+
+  // Detect out-of-order replays: null their delta for the Δ schedule chart
   for (const r of rows) {
     if (!r.actual) continue;
     if (rows.some(r2 => r2.actual && r2.matchNum > r.matchNum && r2.actual < r.actual)) {
       r.isReplay = true;
-      r.delta = null;      // exclude from Δ schedule chart
-      r.cycleTime = null;  // gap against previous match is meaningless
+      r.delta = null;
       r.isOutlier = true;
     }
   }
-  // A match following a replay has its cycle time computed against a skipped match,
-  // producing a negative or implausibly small value — null it out.
-  for (const r of rows) {
-    if (r.cycleTime != null && r.cycleTime <= 0) { r.cycleTime = null; r.isOutlier = true; }
-  }
+
+  // IQR outlier detection on actual-play-order cycle times
   const rawCts = rows.map(r => r.cycleTime).filter(v => v != null);
   const { lo, hi } = iqrOutlierBounds(rawCts);
   for (const r of rows) {
     if (r.cycleTime != null && (r.cycleTime < lo || r.cycleTime > hi)) r.isOutlier = true;
   }
+
+  // Sort for display: played matches by actual time, unplayed at end by scheduled/match order
+  rows.sort((a, b) => {
+    if (a.actual && b.actual) return a.actual - b.actual;
+    if (a.actual) return -1;
+    if (b.actual) return 1;
+    return (a.scheduled || a.matchNum) - (b.scheduled || b.matchNum);
+  });
 
   // Compute typical matches per team (exclude surrogate appearances, use mode)
   const teamCounts = new Map();
@@ -432,13 +471,7 @@ function stddev(a) {
 function cycleTimes(rows) { return (rows || []).filter(r => r.cycleTime != null && !r.isOutlier).map(r => r.cycleTime); }
 function scheduledCycleTimes(rows) {
   if (!rows) return [];
-  const out = [];
-  for (let i = 1; i < rows.length; i++) {
-    const r = rows[i], prev = rows[i - 1];
-    if (r.isPostBreak || !r.scheduled || !prev.scheduled) continue;
-    out.push(r.scheduled - prev.scheduled);
-  }
-  return out;
+  return rows.filter(r => r.scheduledCT != null).map(r => r.scheduledCT);
 }
 function deltas(rows)     { return (rows || []).filter(r => r.delta != null).map(r => r.delta); }
 
@@ -883,14 +916,31 @@ function renderEventResults(rows) {
 
   const schedRows = rows.filter(r => r.delta != null);
   if (schedRows.length) {
-    // Build data arrays with null entries inserted at each break so the line gaps there
-    const allDvals = [], allLabels = [], allPtColors = [], breakNullIdxs = [];
+    const replayNums = new Set(rows.filter(r => r.isReplay).map(r => r.matchNum));
+    // Build data arrays: nulls at breaks, replay gap annotations tracked separately
+    const allDvals = [], allLabels = [], allPtColors = [], breakNullIdxs = [], replayGaps = [];
     for (let i = 0; i < schedRows.length; i++) {
-      if (i > 0 && schedRows[i].isPostBreak) {
-        breakNullIdxs.push(allDvals.length);
-        allDvals.push(null);
-        allLabels.push(null);
-        allPtColors.push('transparent');
+    if (i > 0 && schedRows[i].isPostBreak) {
+        // Check whether the break position also has a replay gap — if so, show amber, not grey+null
+        const gapNums = [];
+        for (let mn = schedRows[i - 1].matchNum + 1; mn < schedRows[i].matchNum; mn++) {
+          if (replayNums.has(mn)) gapNums.push(`Q${mn}`);
+        }
+        if (gapNums.length) {
+          replayGaps.push({ idx: allDvals.length, label: `— ${gapNums.join(', ')} replay gap —` });
+        } else {
+          breakNullIdxs.push(allDvals.length);
+          allDvals.push(null); allLabels.push(null); allPtColors.push('transparent');
+        }
+      } else if (i > 0) {
+        // Detect match-number gap caused by out-of-order replays
+        const gapNums = [];
+        for (let mn = schedRows[i - 1].matchNum + 1; mn < schedRows[i].matchNum; mn++) {
+          if (replayNums.has(mn)) gapNums.push(`Q${mn}`);
+        }
+        if (gapNums.length) {
+          replayGaps.push({ idx: allDvals.length, label: `— ${gapNums.join(', ')} replay gap —` });
+        }
       }
       const d = +(schedRows[i].delta / 60).toFixed(2);
       allDvals.push(d);
@@ -927,10 +977,24 @@ function renderEventResults(rows) {
     });
   }
 
+  const replayNums = new Set(rows.filter(r => r.isReplay).map(r => r.matchNum));
+  let prevActualMatchNum = -1; // track last non-replay played match number
   let tbl = '<table class="match-table"><thead><tr><th>Match</th><th>Scheduled</th><th>Actual</th><th>Δ Schedule</th><th>Sched CT</th><th>Cycle Time</th></tr></thead><tbody>';
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
-    if (r.isPostBreak && i > 0) tbl += '<tr class="break-row"><td colspan="6">— break —</td></tr>';
+    // Detect replay gap: consecutive non-replay played matches with a match-number gap
+    let hasReplayGap = false;
+    if (r.actual && !r.isReplay && prevActualMatchNum >= 0 && r.matchNum > prevActualMatchNum + 1) {
+      const gapNums = [];
+      for (let mn = prevActualMatchNum + 1; mn < r.matchNum; mn++) {
+        if (replayNums.has(mn)) gapNums.push(`Q${mn}`);
+      }
+      if (gapNums.length) {
+        tbl += `<tr class="replay-gap-row"><td colspan="6">— ${gapNums.join(', ')} played out of order —</td></tr>`;
+        hasReplayGap = true;
+      }
+    }
+    if (r.isPostBreak && i > 0 && !r.isReplay && !hasReplayGap) tbl += '<tr class="break-row"><td colspan="6">— break —</td></tr>';
     const d = fmtDeltaObj(r.delta);
     const rowCls = r.isReplay ? ' replay-row' : r.isOutlier ? ' outlier-row' : '';
     tbl += `<tr class="${rowCls}">
@@ -941,6 +1005,7 @@ function renderEventResults(rows) {
       <td class="muted-cell">${fmtDur(r.scheduledCT)}</td>
       <td class="${r.cycleTime == null ? 'muted-cell' : ''}">${fmtDur(r.cycleTime)}${r.isOutlier && !r.isReplay ? '<span class="outlier-badge">(outlier)</span>' : ''}</td>
     </tr>`;
+    if (r.actual && !r.isReplay) prevActualMatchNum = r.matchNum;
   }
   tbl += '</tbody></table>';
   document.getElementById('evt-table').innerHTML = tbl;
