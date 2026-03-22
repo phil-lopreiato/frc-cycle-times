@@ -207,6 +207,24 @@ const LIVE_REFRESH_MS = 60 * 1000; // 60 seconds
 
 const CURRENT_YEAR = 2026;
 const FIRST_YEAR   = 2015;
+const LS_VERSION   = 1; // bump to invalidate all persisted cache entries
+
+// ── localStorage persistence ──────────────────────────────────────────────────
+const LS_PREFIX = `ct_v${LS_VERSION}_`;
+function lsGet(key) {
+  try {
+    const raw = localStorage.getItem(LS_PREFIX + key);
+    if (!raw) return null;
+    const { data, expires } = JSON.parse(raw);
+    if (expires && Date.now() > expires) { localStorage.removeItem(LS_PREFIX + key); return null; }
+    return data;
+  } catch { return null; }
+}
+function lsSet(key, data, ttlMs) {
+  try {
+    localStorage.setItem(LS_PREFIX + key, JSON.stringify({ data, expires: ttlMs ? Date.now() + ttlMs : null }));
+  } catch {} // quota exceeded — fail silently
+}
 
 // ── Shared state ─────────────────────────────────────────────────────────────
 let eventsCache  = {};            // year → filtered/sorted event list
@@ -326,21 +344,49 @@ function tbaUrl(path) { return `https://www.thebluealliance.com${path}${path.inc
 
 async function fetchEvents(year) {
   if (eventsCache[year]) return eventsCache[year];
+  // Past years: cache forever. Current year: 1-hour TTL.
+  const isPast = year < CURRENT_YEAR;
+  const cached = lsGet(`events_${year}`);
+  if (cached) {
+    eventsCache[year] = cached;
+    return cached;
+  }
   const r = await fetch(tbaUrl(`/api/v3/events/${year}`));
   if (!r.ok) throw new Error('Failed to load event list');
   const all = await r.json();
   eventsCache[year] = all
     .filter(e => [0, 1, 2, 3, 5].includes(e.event_type))
     .sort((a, b) => (a.week ?? 99) - (b.week ?? 99) || a.name.localeCompare(b.name));
+  lsSet(`events_${year}`, eventsCache[year], isPast ? null : 60 * 60 * 1000);
   return eventsCache[year];
 }
 
 async function fetchEventRows(code, bustCache) {
   if (!bustCache && matchesCache[code]) return matchesCache[code];
+  // Only persist completed events (key starts with year we can infer from code, or check end_date)
+  // We check if the event is in a past year or its end_date has passed
+  if (!bustCache) {
+    const persisted = lsGet(`rows_${code}`);
+    if (persisted) {
+      const rows = Object.assign(persisted.rows, { matchesPerTeam: persisted.matchesPerTeam });
+      matchesCache[code] = rows;
+      return rows;
+    }
+  }
   const r = await fetch(tbaUrl(`/api/v3/event/${code}/matches`));
   if (!r.ok) return null;
   const rows = processMatches(await r.json());
   matchesCache[code] = rows;
+  // Persist if the event is completed: key format is YYYYxxx, check year
+  const today = new Date().toISOString().slice(0, 10);
+  const eventYear = parseInt(code.slice(0, 4), 10);
+  // For past years persist forever; for current year only after all matches have actual times
+  // (heuristic: at least one match played and none without actual_time among played matches)
+  const allPlayed = rows.length > 0 && rows.every(r2 => r2.actual || !r2.scheduled || r2.scheduled > Date.now() / 1000);
+  if (eventYear < CURRENT_YEAR || allPlayed) {
+    lsSet(`rows_${code}`, { rows: Array.from(rows), matchesPerTeam: rows.matchesPerTeam },
+      eventYear < CURRENT_YEAR ? null : 24 * 60 * 60 * 1000);
+  }
   return rows;
 }
 
