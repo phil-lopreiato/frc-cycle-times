@@ -79,6 +79,7 @@ button.btn-primary { border: none; }
 .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; text-align: center; }
 .stat-value { font-size: 1.4rem; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .stat-label { font-size: 0.7rem; color: var(--muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.03em; }
+.stat-sub   { font-size: 0.7rem; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
 .ahead  { color: var(--success); }
 .behind { color: var(--error); }
 
@@ -622,10 +623,10 @@ function eventWeekHref(e, year) {
 }
 
 
-function statCard(val, label, cls) {
-  return `<div class="stat"><div class="stat-value ${cls||''}">${val}</div><div class="stat-label">${label}</div></div>`;
+function statCard(val, label, cls, sub) {
+  return `<div class="stat"><div class="stat-value ${cls||''}">${val}</div><div class="stat-label">${label}</div>${sub ? `<div class="stat-sub">${sub}</div>` : ''}</div>`;
 }
-function renderStats(cts, ds, schedCts) {
+function renderStats(cts, ds, schedCts, minInfo) {
   if (!cts.length) return '<div style="color:var(--muted);font-size:0.875rem">No timing data yet.</div>';
   const avgD   = ds.length ? mean(ds) : null;
   const deltaH = avgD != null
@@ -634,12 +635,15 @@ function renderStats(cts, ds, schedCts) {
   const schedH = schedCts && schedCts.length
     ? statCard(fmtDur(mean(schedCts)), 'Avg Scheduled CT')
     : '';
+  const minSub = minInfo
+    ? (minInfo.event ? `${minInfo.match} · ${minInfo.event}` : minInfo.match)
+    : null;
   return [
     statCard(cts.length,           'Matches Played'),
     statCard(fmtDur(mean(cts)),    'Mean'),
     statCard(fmtDur(median(cts)),  'Median (P50)'),
     statCard(fmtDur(stddev(cts)),  'Std Dev'),
-    statCard(fmtDur(Math.min(...cts)), 'Min'),
+    statCard(fmtDur(Math.min(...cts)), 'Min', '', minSub),
     statCard(fmtDur(Math.max(...cts)), 'Max'),
     schedH,
     deltaH,
@@ -771,7 +775,9 @@ async function viewHome(year) {
 // ── VIEW: Event detail ────────────────────────────────────────────────────────
 function renderEventResults(rows) {
   const cts = cycleTimes(rows), ds = deltas(rows), schedCts = scheduledCycleTimes(rows);
-  document.getElementById('evt-stats').innerHTML = renderStats(cts, ds, schedCts);
+  const minRow  = rows.filter(r => r.cycleTime != null && !r.isOutlier).sort((a, b) => a.cycleTime - b.cycleTime)[0];
+  const minInfo = minRow ? { match: `Q${minRow.matchNum}` } : null;
+  document.getElementById('evt-stats').innerHTML = renderStats(cts, ds, schedCts, minInfo);
 
   if (cts.length) {
     mkChart('evt-dist', distChartConfig(cts));
@@ -1034,16 +1040,23 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
 
   function pooled() {
     const cts = [], ds = [], schedCts = [];
+    let minCt = Infinity, minInfo = null;
     for (let i = 0; i < allRows.length; i++) {
       if (aggState.excluded.has(i) || !allRows[i]) continue;
       cts.push(...cycleTimes(allRows[i]));
       ds.push(...deltas(allRows[i]));
       schedCts.push(...scheduledCycleTimes(allRows[i]));
+      for (const r of allRows[i]) {
+        if (r.cycleTime != null && !r.isOutlier && r.cycleTime < minCt) {
+          minCt = r.cycleTime;
+          minInfo = { match: `Q${r.matchNum}`, event: events[i].key };
+        }
+      }
     }
-    return { cts, ds, schedCts };
+    return { cts, ds, schedCts, minInfo };
   }
 
-  const { cts: pooledCts, ds: pooledDs, schedCts: pooledSchedCts } = pooled();
+  const { cts: pooledCts, ds: pooledDs, schedCts: pooledSchedCts, minInfo: pooledMinInfo } = pooled();
   const eventsWithData = events.filter((_, i) => allRows[i] && cycleTimes(allRows[i]).length > 0);
   const totalMatches   = allRows.reduce((s, r) => s + (r ? r.filter(x => x.actual).length : 0), 0);
   const backLabel      = backHref === '#home' || backHref.startsWith('#home/') ? 'All Events' : 'Back';
@@ -1058,7 +1071,7 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
     <p class="page-sub">${subtitle}${totalMatches ? ` · ${totalMatches.toLocaleString()} matches played` : ''}</p>
     <div class="card">
       <h2>Cycle Time Statistics</h2>
-      <div class="stats-grid" id="agg-stats-grid">${renderStats(pooledCts, pooledDs, pooledSchedCts)}</div>
+      <div class="stats-grid" id="agg-stats-grid">${renderStats(pooledCts, pooledDs, pooledSchedCts, pooledMinInfo)}</div>
     </div>
     <div class="charts-grid">
       <div class="card"><h2>Distribution</h2><div class="chart-wrap"><canvas id="agg-dist"></canvas></div></div>
@@ -1085,9 +1098,9 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
 
   aggState.pooled    = pooled;
   aggState.redraw    = function() {
-    const { cts, ds, schedCts } = aggState.pooled();
+    const { cts, ds, schedCts, minInfo } = aggState.pooled();
     const statsEl = document.getElementById('agg-stats-grid');
-    if (statsEl) statsEl.innerHTML = renderStats(cts, ds, schedCts);
+    if (statsEl) statsEl.innerHTML = renderStats(cts, ds, schedCts, minInfo);
     if (cts.length) mkChart('agg-dist', distChartConfig(cts));
     const withData = aggState.events.filter((_, i) => !aggState.excluded.has(i) && allRows[i] && cycleTimes(allRows[i]).length > 0);
     if (aggState.deltaChartMode === 'per-event') renderPerEventDeltaChart(withData, aggState.events, allRows);
