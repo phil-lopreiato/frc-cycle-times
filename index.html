@@ -1095,6 +1095,7 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
     renderPerWeekDeltaChart(events, allRows);
     renderPerWeekCtChart(events, allRows, aggState.excluded);
   }
+  syncSelectAllCheckbox();
 
   aggState.pooled    = pooled;
   aggState.redraw    = function() {
@@ -1107,6 +1108,7 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
     else { renderPerWeekDeltaChart(aggState.events, allRows); renderPerWeekCtChart(aggState.events, allRows, aggState.excluded); }
     const wrap = document.getElementById('agg-table-wrap');
     if (wrap) wrap.innerHTML = renderAggTable(aggState.events, aggState.allRows, aggState.excluded, aggState.sortCol, aggState.sortDir);
+    syncSelectAllCheckbox();
   };
 }
 
@@ -1226,7 +1228,27 @@ window.toggleAggEvent = function(idx) {
   const row = document.querySelector(`#agg-table-wrap tr[data-idx="${idx}"]`);
   if (row) row.classList.toggle('agg-excluded', aggState.excluded.has(idx));
   aggState.redraw();
+  syncSelectAllCheckbox();
 };
+
+window.toggleAllAggEvents = function(checked) {
+  if (!aggState) return;
+  if (checked) {
+    aggState.excluded.clear();
+  } else {
+    aggState.events.forEach((_, i) => aggState.excluded.add(i));
+  }
+  aggState.redraw();
+};
+
+function syncSelectAllCheckbox() {
+  const allCb = document.getElementById('agg-select-all');
+  if (!allCb || !aggState) return;
+  const allChecked = aggState.events.every((_, i) => !aggState.excluded.has(i));
+  const someChecked = !allChecked && aggState.events.some((_, i) => !aggState.excluded.has(i));
+  allCb.checked = allChecked;
+  allCb.indeterminate = someChecked;
+}
 
 window.sortAggTable = function(col) {
   if (!aggState) return;
@@ -1238,6 +1260,7 @@ window.sortAggTable = function(col) {
   }
   const wrap = document.getElementById('agg-table-wrap');
   if (wrap) wrap.innerHTML = renderAggTable(aggState.events, aggState.allRows, aggState.excluded, aggState.sortCol, aggState.sortDir);
+  syncSelectAllCheckbox();
 };
 
 function aggSortVal(events, allRows, col, i) {
@@ -1283,8 +1306,10 @@ function renderAggTable(events, allRows, excluded, sortCol, sortDir) {
     { label: 'Avg Δ Sched',  sortable: true  },
     ...(anyLive ? [{ label: 'Live Δ', sortable: true }] : []),
   ];
+  const allChecked = events.length > 0 && events.every((_, i) => !excluded.has(i));
+  const someChecked = !allChecked && events.some((_, i) => !excluded.has(i));
   const headCells = cols.map((c, ci) => {
-    if (!c.sortable) return '<th></th>';
+    if (!c.sortable) return `<th style="text-align:center"><input type="checkbox" id="agg-select-all" ${allChecked ? 'checked' : ''} onchange="toggleAllAggEvents(this.checked)" title="Select / deselect all"></th>`;
     const active = sortCol === ci;
     const icon = active ? (sortDir === 'asc' ? '▲' : '▼') : '▲';
     return `<th class="sortable${active ? ' sort-active' : ''}" onclick="sortAggTable(${ci})">${c.label}<i class="sort-icon">${icon}</i></th>`;
