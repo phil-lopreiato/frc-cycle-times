@@ -229,7 +229,7 @@ function route() {
   stopLiveRefresh();
   if (!page || page === 'home') return viewHome(parseInt(parts[1], 10) || CURRENT_YEAR);
   if (page === 'event')   return viewEvent(param);
-  if (page === 'week')    return viewWeek(parseInt(parts[1], 10), parseInt(parts[2], 10));
+  if (page === 'week')    return viewWeek(parseInt(parts[1], 10), parts[2] === 'cmp' ? 'cmp' : parseInt(parts[2], 10));
   if (page === 'overall') return viewOverall(CURRENT_YEAR);
   if (page === 'season')  return viewOverall(parseInt(parts[1], 10) || CURRENT_YEAR);
   viewHome(CURRENT_YEAR);
@@ -256,7 +256,7 @@ async function fetchEvents(year) {
   if (!r.ok) throw new Error('Failed to load event list');
   const all = await r.json();
   eventsCache[year] = all
-    .filter(e => e.event_type === 0 || e.event_type === 1)
+    .filter(e => [0, 1, 2, 3, 5].includes(e.event_type))
     .sort((a, b) => (a.week ?? 99) - (b.week ?? 99) || a.name.localeCompare(b.name));
   return eventsCache[year];
 }
@@ -453,19 +453,24 @@ function rerenderHomeEventLists() {
 
   const byWeek = {};
   for (const e of events) {
-    const w = e.week != null ? e.week : 'other';
+    const w = eventWeekKey(e);
     (byWeek[w] = byWeek[w] || []).push(e);
   }
   const weekKeys = Object.keys(byWeek).sort((a, b) => {
+    if (a === 'cmp') return 0.5;   // CMP sorts after regular weeks, before 'other'
+    if (b === 'cmp') return -0.5;
     if (a === 'other') return 1; if (b === 'other') return -1;
     return Number(a) - Number(b);
   });
 
   let html = '';
   for (const wk of weekKeys) {
-    const weekNum = wk === 'other' ? null : Number(wk) + 1;
-    const label   = weekNum ? `Week ${weekNum}` : 'Other';
+    const isCmpWk = wk === 'cmp';
+    const weekNum = (wk === 'other' || isCmpWk) ? null : Number(wk) + 1;
     const evts    = byWeek[wk];
+    const allCmp  = isCmpWk;
+    const label   = isCmpWk ? 'Championship' : weekNum ? `Week ${weekNum}` : 'Other';
+    const weekHref = isCmpWk ? `#week/${homeYear}/cmp` : weekNum ? `#week/${homeYear}/${weekNum}` : null;
 
     const visibleEvts = liveFilterActive
       ? evts.filter(e => e.start_date <= today && e.end_date >= today)
@@ -483,7 +488,7 @@ function rerenderHomeEventLists() {
           <span class="week-label">${label}</span>
           ${dateStr ? `<span class="week-dates">${dateStr}</span>` : ''}
         </div>
-        ${weekNum != null ? `<a href="#week/${homeYear}/${weekNum}" class="btn-secondary">View Week Aggregate →</a>` : ''}
+        ${weekHref ? `<a href="${weekHref}" class="btn-secondary">View Week Aggregate →</a>` : ''}
       </div>
       <div class="event-list">`;
 
@@ -607,7 +612,16 @@ function eventStatus(e) {
   return { label: fmtDate(e.start_date), cls: 'status-upcoming' };
 }
 
-// ── Shared stat card HTML ─────────────────────────────────────────────────────
+function isCmp(e) { return [3, 4].includes(e.event_type); }
+function eventWeekKey(e) { return isCmp(e) ? 'cmp' : e.week != null ? e.week : 'other'; }
+function weekKeyLabel(wk) { return wk === 'cmp' ? 'CMP' : wk === 'other' ? 'Other' : `Week ${Number(wk) + 1}`; }
+function eventWeekLabel(e) { return isCmp(e) ? 'CMP' : e.week != null ? `Wk ${e.week + 1}` : '—'; }
+function eventWeekHref(e, year) {
+  if (isCmp(e)) return `#week/${year}/cmp`;
+  return e.week != null ? `#week/${year}/${e.week + 1}` : null;
+}
+
+
 function statCard(val, label, cls) {
   return `<div class="stat"><div class="stat-value ${cls||''}">${val}</div><div class="stat-label">${label}</div></div>`;
 }
@@ -716,19 +730,22 @@ async function viewHome(year) {
 
     const byWeekForSelect = {};
     for (const e of events) {
-      const w = e.week != null ? e.week : 'other';
+      const w = eventWeekKey(e);
       (byWeekForSelect[w] = byWeekForSelect[w] || []).push(e);
     }
     const weekKeysForSelect = Object.keys(byWeekForSelect).sort((a, b) => {
+      if (a === 'cmp') return 0.5; if (b === 'cmp') return -0.5;
       if (a === 'other') return 1; if (b === 'other') return -1;
       return Number(a) - Number(b);
     });
     for (const wk of weekKeysForSelect.filter(w => w !== 'other')) {
-      const n = Number(wk) + 1;
+      const isCmpWk = wk === 'cmp';
+      const val = isCmpWk ? 'cmp' : Number(wk) + 1;
       const evts = byWeekForSelect[wk];
       const dates = evts.map(e => e.start_date).filter(Boolean).sort();
       const dateStr = dates.length ? ' · ' + fmtDate(dates[0]) : '';
-      html += `<option value="${n}">Week ${n}${dateStr}</option>`;
+      const lbl = isCmpWk ? `CMP${dateStr}` : `Week ${val}${dateStr}`;
+      html += `<option value="${val}">${lbl}</option>`;
     }
     html += `</select></div></div></div>
       <div id="eventListsContainer"></div>`;
@@ -912,8 +929,10 @@ async function viewEvent(code) {
     const teamCount = Array.isArray(teamsData) ? teamsData.length : 0;
     const weekNum   = eventData.week != null ? eventData.week + 1 : null;
     const evtYear   = parseInt(code, 10) || CURRENT_YEAR;
-    const weekHash  = weekNum ? (evtYear === CURRENT_YEAR ? `#week/${evtYear}/${weekNum}` : `#week/${evtYear}/${weekNum}`) : null;
-    const weekLink  = weekHash ? ` · <a href="${weekHash}" style="color:var(--accent);text-decoration:none">All Week ${weekNum} Events →</a>` : '';
+    const evtIsCmp  = isCmp(eventData);
+    const weekHash  = weekNum ? `#week/${evtYear}/${weekNum}` : null;
+    const weekLinkText = evtIsCmp ? 'All CMP Events →' : `All Week ${weekNum} Events →`;
+    const weekLink  = weekHash ? ` · <a href="${weekHash}" style="color:var(--accent);text-decoration:none">${weekLinkText}</a>` : '';
     const liveBadge = isLive
       ? ' <span class="status-live" style="font-size:0.75rem;padding:2px 7px;border-radius:4px;vertical-align:middle">● Live</span>' +
         ' <span id="evt-last-updated" style="font-size:0.75rem;color:var(--muted);margin-left:6px"></span>'
@@ -952,14 +971,18 @@ async function viewWeek(year, weekNum) {
   if (!weekNum) { year = CURRENT_YEAR; weekNum = year; } // back-compat if only weekNum passed
   year = year || CURRENT_YEAR;
   if (!weekNum) return viewHome(year);
-  document.title = `Week ${weekNum} – FRC ${year} Cycle Times`;
+  const isCmpWeek = weekNum === 'cmp';
+  const weekLabel = isCmpWeek ? 'CMP' : `Week ${weekNum}`;
+  document.title = `${weekLabel} – FRC ${year} Cycle Times`;
   const backHref = year === CURRENT_YEAR ? '#home' : `#home/${year}`;
   setApp(`<a href="${backHref}" class="back-btn">← All Events</a>
-    <div class="loading">Loading Week ${weekNum} events… <span id="load-progress"></span></div>`);
+    <div class="loading">Loading ${weekLabel} events… <span id="load-progress"></span></div>`);
   try {
     const events = await fetchEvents(year);
-    const weekEvents = events.filter(e => (e.week ?? -1) + 1 === weekNum);
-    if (!weekEvents.length) throw new Error('No events found for Week ' + weekNum);
+    const weekEvents = isCmpWeek
+      ? events.filter(e => isCmp(e))
+      : events.filter(e => (e.week ?? -1) + 1 === weekNum);
+    if (!weekEvents.length) throw new Error(`No events found for ${weekLabel}`);
     const allRows = await fetchManyEvents(weekEvents, (d, t) => {
       const el = document.getElementById('load-progress');
       if (el) el.textContent = `(${d}/${t})`;
@@ -968,7 +991,7 @@ async function viewWeek(year, weekNum) {
     const dateStr = dates.length
       ? fmtDate(dates[0]) + (dates[dates.length-1] !== dates[0] ? ' – ' + fmtDate(dates[dates.length-1]) : '')
       : '';
-    renderAggregatePage(`Week ${weekNum}`, dateStr, backHref, weekEvents, allRows, 'per-event');
+    renderAggregatePage(weekLabel, dateStr, backHref, weekEvents, allRows, 'per-event');
 
     const today = new Date().toISOString().slice(0, 10);
     const liveWeekEvents = weekEvents.filter(e => e.start_date && e.end_date && e.start_date <= today && e.end_date >= today);
@@ -1104,15 +1127,16 @@ function renderPerEventDeltaChart(eventsWithData, allEvents, allRows) {
 function renderPerWeekDeltaChart(events, allRows) {
   const byWeek = {};
   events.forEach((e, i) => {
-    const wk = e.week != null ? e.week + 1 : 'other';
+    const wk = eventWeekKey(e);
     if (!byWeek[wk]) byWeek[wk] = [];
     const ds = deltas(allRows[i]);
     byWeek[wk].push(...ds);
   });
   const weeks = Object.keys(byWeek).sort((a, b) => {
+    if (a === 'cmp') return 0.5; if (b === 'cmp') return -0.5;
     if (a === 'other') return 1; if (b === 'other') return -1; return a - b;
   });
-  const labels = weeks.map(w => w === 'other' ? 'Other' : `Week ${w}`);
+  const labels = weeks.map(w => weekKeyLabel(w));
   const data   = weeks.map(w => byWeek[w].length ? +(mean(byWeek[w]) / 60).toFixed(2) : null);
   const colors = data.map(d => d == null ? '#88888866' : d >= 0 ? '#10b981b3' : '#ef4444b3');
   mkChart('agg-delta', {
@@ -1133,15 +1157,16 @@ function renderPerWeekCtChart(events, allRows, excluded) {
   const byWeek = {};
   events.forEach((e, i) => {
     if (excluded && excluded.has(i)) return;
-    const wk = e.week != null ? e.week + 1 : 'other';
+    const wk = eventWeekKey(e);
     if (!byWeek[wk]) byWeek[wk] = { actual: [], sched: [] };
     byWeek[wk].actual.push(...cycleTimes(allRows[i]));
     byWeek[wk].sched.push(...scheduledCycleTimes(allRows[i]));
   });
   const weeks = Object.keys(byWeek).sort((a, b) => {
+    if (a === 'cmp') return 0.5; if (b === 'cmp') return -0.5;
     if (a === 'other') return 1; if (b === 'other') return -1; return a - b;
   });
-  const labels     = weeks.map(w => w === 'other' ? 'Other' : `Week ${w}`);
+  const labels     = weeks.map(w => weekKeyLabel(w));
   const actualData = weeks.map(w => byWeek[w].actual.length ? +(mean(byWeek[w].actual) / 60).toFixed(2) : null);
   const schedData  = weeks.map(w => byWeek[w].sched.length  ? +(mean(byWeek[w].sched)  / 60).toFixed(2) : null);
   if (!actualData.some(v => v != null)) return;
@@ -1205,7 +1230,7 @@ window.sortAggTable = function(col) {
 function aggSortVal(events, allRows, col, i) {
   const e = events[i], rows = allRows[i];
   switch (col) {
-    case 1: return e.week ?? 999;
+    case 1: return isCmp(e) ? 998 : e.week ?? 999;
     case 2: return e.name;
     case 3: return [e.city, e.state_prov].filter(Boolean).join(', ');
     case 4: return rows ? rows.filter(r => r.actual).length : 0;
@@ -1271,7 +1296,8 @@ function renderAggTable(events, allRows, excluded, sortCol, sortDir) {
     const played   = allRows[i] ? allRows[i].filter(r => r.actual).length : 0;
     const avgD     = ds.length ? fmtDeltaObj(mean(ds)) : { text: '—', cls: '' };
     const wkYear   = aggState?.seasonYear || CURRENT_YEAR;
-    const wk       = e.week != null ? `<a href="#week/${wkYear}/${e.week + 1}" style="color:var(--accent);text-decoration:none">Wk ${e.week + 1}</a>` : '—';
+    const wkHref   = eventWeekHref(e, wkYear);
+    const wk       = wkHref ? `<a href="${wkHref}" style="color:var(--accent);text-decoration:none">${eventWeekLabel(e)}</a>` : eventWeekLabel(e);
     const excCls   = excluded.has(i) ? ' agg-excluded' : '';
     let liveCell = '';
     if (anyLive) {
