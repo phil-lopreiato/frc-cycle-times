@@ -735,10 +735,10 @@ function renderStats(cts, ds, schedCts, minInfo) {
     : null;
   return [
     statCard(cts.length,           'In Scope Matches'),
-    statCard(fmtDur(mean(cts)),    'Mean'),
-    statCard(fmtDur(median(cts)),  'Median (P50)'),
-    statCard(fmtDur(stddev(cts)),  'Std Dev'),
-    statCard(fmtDur(Math.min(...cts)), 'Min', '', minSub),
+    statCard(fmtDur(mean(cts)),    'Mean CT'),
+    statCard(fmtDur(median(cts)),  'Median CT'),
+    statCard(fmtDur(stddev(cts)),  'Std Dev CT'),
+    statCard(fmtDur(Math.min(...cts)), 'Min CT', '', minSub),
     schedH,
     deltaH,
   ].join('');
