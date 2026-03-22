@@ -80,8 +80,9 @@ button.btn-primary { border: none; }
 .stat-value { font-size: 1.4rem; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .stat-label { font-size: 0.7rem; color: var(--muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.03em; }
 .stat-sub   { font-size: 0.7rem; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
-.ahead  { color: var(--success); }
-.behind { color: var(--error); }
+.ahead   { color: var(--success); }
+.warning { color: var(--warning); }
+.behind  { color: var(--error); }
 
 /* ── Charts ───────────────────────────────────────────────────────────────── */
 .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
@@ -248,6 +249,59 @@ function mkChart(id, config) {
   activeCharts[id] = new Chart(el.getContext('2d'), config);
 }
 
+// Custom plugin: draw dashed vertical lines between data points at given 0-based indices
+Chart.register({
+  id: 'verticalBreaks',
+  afterDraw(chart) {
+    const breaks = chart.options.plugins?.verticalBreaks?.indices;
+    if (!breaks?.length) return;
+    const { ctx, scales: { x, y } } = chart;
+    // Cache pixel positions for hover detection
+    chart._breakPixels = breaks.map(idx => (x.getPixelForValue(idx - 1) + x.getPixelForValue(idx + 1)) / 2);
+    chart._breakYTop   = y.top;
+    chart._breakYBot   = y.bottom;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(136,136,136,0.55)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    for (const px of chart._breakPixels) {
+      ctx.beginPath();
+      ctx.moveTo(px, y.top);
+      ctx.lineTo(px, y.bottom);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    ctx.restore();
+  },
+  afterEvent(chart, args) {
+    const e = args.event;
+    const pixels = chart._breakPixels;
+    if (!pixels?.length) return;
+    let tip = document.getElementById('_break-tip');
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.id = '_break-tip';
+      tip.style.cssText = 'position:fixed;background:rgba(17,17,17,0.82);color:#fff;padding:3px 9px;border-radius:4px;font-size:0.78rem;pointer-events:none;z-index:9999;white-space:nowrap;display:none;';
+      document.body.appendChild(tip);
+    }
+    if (e.type === 'mousemove') {
+      const inArea = e.y >= chart._breakYTop && e.y <= chart._breakYBot;
+      const hit    = inArea && pixels.some(px => Math.abs(e.x - px) <= 8);
+      if (hit) {
+        const rect = chart.canvas.getBoundingClientRect();
+        tip.textContent = '— break —';
+        tip.style.left = (rect.left + e.x + 14) + 'px';
+        tip.style.top  = (rect.top  + e.y - 14) + 'px';
+        tip.style.display = 'block';
+      } else {
+        tip.style.display = 'none';
+      }
+    } else if (e.type === 'mouseout') {
+      tip.style.display = 'none';
+    }
+  }
+});
+
 // ── TBA fetching ─────────────────────────────────────────────────────────────
 function tbaUrl(path) { return `https://www.thebluealliance.com${path}${path.includes('?') ? '&' : '?'}X-TBA-Auth-Key=${TBA_KEY}`; }
 
@@ -301,6 +355,21 @@ function processMatches(data) {
     if (crossDay) { cycleTime = null; }
     return { matchNum: m.match_number, scheduled: m.time, actual: m.actual_time, cycleTime, scheduledCT, isPostBreak, delta: crossDay ? null : delta, isOutlier: crossDay };
   });
+  // Detect out-of-order replays: a played match is a replay if any higher-numbered
+  // match was played earlier (actual_time of a lower match > actual_time of a higher match).
+  for (const r of rows) {
+    if (!r.actual) continue;
+    if (rows.some(r2 => r2.actual && r2.matchNum > r.matchNum && r2.actual < r.actual)) {
+      r.delta = null;      // exclude from Δ schedule chart
+      r.cycleTime = null;  // gap against previous match is meaningless
+      r.isOutlier = true;
+    }
+  }
+  // A match following a replay has its cycle time computed against a skipped match,
+  // producing a negative or implausibly small value — null it out.
+  for (const r of rows) {
+    if (r.cycleTime != null && r.cycleTime <= 0) { r.cycleTime = null; r.isOutlier = true; }
+  }
   const rawCts = rows.map(r => r.cycleTime).filter(v => v != null);
   const { lo, hi } = iqrOutlierBounds(rawCts);
   for (const r of rows) {
@@ -593,9 +662,10 @@ function fmtDeltaObj(s) {
   if (s == null) return { text: '—', cls: '' };
   const abs = Math.round(Math.abs(s));
   const str = Math.floor(abs / 60) + ':' + String(abs % 60).padStart(2, '0');
-  if (s >  5) return { text: '+' + str, cls: 'ahead' };
-  if (s < -5) return { text: '−' + str, cls: 'behind' };
-  return { text: str, cls: '' };
+  if (s >= 0)    return { text: '+' + str,  cls: 'ahead' };   // ahead of schedule
+  if (s >= -300) return { text: '−' + str,  cls: 'ahead' };   // ≤5 min behind: green
+  if (s >= -900) return { text: '−' + str,  cls: 'warning' }; // 5–15 min behind: yellow
+  return                { text: '−' + str,  cls: 'behind' };   // >15 min behind: red
 }
 function fmtTime(u) {
   if (!u) return '—';
@@ -788,27 +858,40 @@ function renderEventResults(rows) {
 
   const schedRows = rows.filter(r => r.delta != null);
   if (schedRows.length) {
-    const dvals = schedRows.map(r => +(r.delta / 60).toFixed(2));
-    const ptColors = dvals.map(d => d >= 0 ? '#10b981' : '#ef4444');
+    // Build data arrays with null entries inserted at each break so the line gaps there
+    const allDvals = [], allLabels = [], allPtColors = [], breakNullIdxs = [];
+    for (let i = 0; i < schedRows.length; i++) {
+      if (i > 0 && schedRows[i].isPostBreak) {
+        breakNullIdxs.push(allDvals.length);
+        allDvals.push(null);
+        allLabels.push(null);
+        allPtColors.push('transparent');
+      }
+      const d = +(schedRows[i].delta / 60).toFixed(2);
+      allDvals.push(d);
+      allLabels.push(schedRows[i].matchNum);
+      allPtColors.push(d >= -5 ? '#10b981' : d >= -15 ? '#f59e0b' : '#ef4444');
+    }
     mkChart('evt-sched', {
       type: 'line',
       data: {
-        labels: schedRows.map(r => r.matchNum),
+        labels: allLabels,
         datasets: [
-          { data: dvals.map(() => 0), borderColor: '#88888866', borderDash: [4,4], borderWidth: 1, pointRadius: 0, fill: false, tension: 0 },
-          { label: 'Δ Schedule', data: dvals, borderColor: '#3b82f6', backgroundColor: '#3b82f618', fill: true, tension: 0.2, pointRadius: 3, pointBackgroundColor: ptColors, pointBorderColor: ptColors },
+          { data: allDvals.map(v => v === null ? null : 0), borderColor: '#88888866', borderDash: [4,4], borderWidth: 1, pointRadius: 0, fill: false, tension: 0, spanGaps: false },
+          { label: 'Δ Schedule', data: allDvals, borderColor: '#3b82f6', backgroundColor: '#3b82f618', fill: true, tension: 0.2, pointRadius: 3, pointBackgroundColor: allPtColors, pointBorderColor: allPtColors, spanGaps: false },
         ],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: {
+          verticalBreaks: { indices: breakNullIdxs },
           legend: { display: false },
           tooltip: {
             callbacks: {
-              title: i => 'Match ' + i[0].label,
-              label: i => i.datasetIndex === 0 ? null : (i.raw >= 0 ? '+' : '') + i.raw.toFixed(2) + ' min ' + (i.raw >= 0 ? 'ahead' : 'behind'),
+              title: i => i[0].label != null ? 'Match ' + i[0].label : null,
+              label: i => i.datasetIndex === 0 || i.raw == null ? null : (i.raw >= 0 ? '+' : '') + i.raw.toFixed(2) + ' min ' + (i.raw >= 0 ? 'ahead' : 'behind'),
             },
-            filter: i => i.datasetIndex === 1,
+            filter: i => i.datasetIndex === 1 && i.raw != null,
           },
         },
         scales: {
