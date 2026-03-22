@@ -1012,6 +1012,7 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
         </div>
       </div>
     </div>
+    ${deltaChartMode === 'per-week' ? '<div class="card"><h2>Avg Cycle Time by Week</h2><div class="chart-wrap"><canvas id="agg-week-ct"></canvas></div></div>' : ''}
     <div class="card">
       <h2>By Event</h2>
       <div class="table-wrap" id="agg-table-wrap">${renderAggTable(events, allRows, aggState.excluded, aggState.sortCol, aggState.sortDir)}</div>
@@ -1023,6 +1024,7 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
     renderPerEventDeltaChart(eventsWithData, events, allRows);
   } else {
     renderPerWeekDeltaChart(events, allRows);
+    renderPerWeekCtChart(events, allRows, aggState.excluded);
   }
 
   aggState.pooled    = pooled;
@@ -1033,7 +1035,7 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
     if (cts.length) mkChart('agg-dist', distChartConfig(cts));
     const withData = aggState.events.filter((_, i) => !aggState.excluded.has(i) && allRows[i] && cycleTimes(allRows[i]).length > 0);
     if (aggState.deltaChartMode === 'per-event') renderPerEventDeltaChart(withData, aggState.events, allRows);
-    else renderPerWeekDeltaChart(aggState.events, allRows);
+    else { renderPerWeekDeltaChart(aggState.events, allRows); renderPerWeekCtChart(aggState.events, allRows, aggState.excluded); }
     const wrap = document.getElementById('agg-table-wrap');
     if (wrap) wrap.innerHTML = renderAggTable(aggState.events, aggState.allRows, aggState.excluded, aggState.sortCol, aggState.sortDir);
   };
@@ -1089,6 +1091,58 @@ function renderPerWeekDeltaChart(events, allRows) {
       scales: {
         x: { grid: { display: false } },
         y: { title: { display: true, text: '+ ahead  /  − behind (min)' }, grid: { color: c => c.tick.value === 0 ? '#88888888' : '#88888822' } },
+      },
+    },
+  });
+}
+
+function renderPerWeekCtChart(events, allRows, excluded) {
+  const byWeek = {};
+  events.forEach((e, i) => {
+    if (excluded && excluded.has(i)) return;
+    const wk = e.week != null ? e.week + 1 : 'other';
+    if (!byWeek[wk]) byWeek[wk] = { actual: [], sched: [] };
+    byWeek[wk].actual.push(...cycleTimes(allRows[i]));
+    byWeek[wk].sched.push(...scheduledCycleTimes(allRows[i]));
+  });
+  const weeks = Object.keys(byWeek).sort((a, b) => {
+    if (a === 'other') return 1; if (b === 'other') return -1; return a - b;
+  });
+  const labels     = weeks.map(w => w === 'other' ? 'Other' : `Week ${w}`);
+  const actualData = weeks.map(w => byWeek[w].actual.length ? +(mean(byWeek[w].actual) / 60).toFixed(2) : null);
+  const schedData  = weeks.map(w => byWeek[w].sched.length  ? +(mean(byWeek[w].sched)  / 60).toFixed(2) : null);
+  if (!actualData.some(v => v != null)) return;
+  mkChart('agg-week-ct', {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Avg Actual CT',
+          data: actualData,
+          borderColor: '#3b82f6', backgroundColor: '#3b82f618',
+          pointRadius: 4, pointBackgroundColor: '#3b82f6',
+          tension: 0.3, fill: false,
+        },
+        {
+          label: 'Avg Scheduled CT',
+          data: schedData,
+          borderColor: '#10b981', backgroundColor: '#10b98118',
+          borderDash: [5, 4],
+          pointRadius: 4, pointBackgroundColor: '#10b981',
+          tension: 0.3, fill: false,
+        },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, labels: { color: '#cbd5e1', font: { size: 12 } } },
+        tooltip: { callbacks: { label: i => `${i.dataset.label}: ${i.raw == null ? '—' : i.raw.toFixed(2) + ' min'}` } },
+      },
+      scales: {
+        x: { grid: { color: '#88888822' } },
+        y: { title: { display: true, text: 'Minutes' }, beginAtZero: false, grid: { color: '#88888822' } },
       },
     },
   });
