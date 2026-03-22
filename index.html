@@ -379,6 +379,27 @@ function processMatches(data) {
   for (const r of rows) {
     if (r.cycleTime != null && (r.cycleTime < lo || r.cycleTime > hi)) r.isOutlier = true;
   }
+
+  // Compute typical matches per team (exclude surrogate appearances, use mode)
+  const teamCounts = new Map();
+  for (const m of quals) {
+    for (const side of ['red', 'blue']) {
+      const a = m.alliances?.[side];
+      if (!a) continue;
+      const surrogates = new Set(a.surrogate_team_keys || []);
+      for (const key of (a.team_keys || [])) {
+        if (!surrogates.has(key)) teamCounts.set(key, (teamCounts.get(key) || 0) + 1);
+      }
+    }
+  }
+  if (teamCounts.size > 0) {
+    const freqs = new Map();
+    for (const v of teamCounts.values()) freqs.set(v, (freqs.get(v) || 0) + 1);
+    let best = 0, bestFreq = 0;
+    for (const [val, freq] of freqs) { if (freq > bestFreq) { best = val; bestFreq = freq; } }
+    rows.matchesPerTeam = best;
+  }
+
   return rows;
 }
 
@@ -718,7 +739,6 @@ function renderStats(cts, ds, schedCts, minInfo) {
     statCard(fmtDur(median(cts)),  'Median (P50)'),
     statCard(fmtDur(stddev(cts)),  'Std Dev'),
     statCard(fmtDur(Math.min(...cts)), 'Min', '', minSub),
-    statCard(fmtDur(Math.max(...cts)), 'Max'),
     schedH,
     deltaH,
   ].join('');
@@ -851,7 +871,8 @@ function renderEventResults(rows) {
   const cts = cycleTimes(rows), ds = deltas(rows), schedCts = scheduledCycleTimes(rows);
   const minRow  = rows.filter(r => r.cycleTime != null && !r.isOutlier).sort((a, b) => a.cycleTime - b.cycleTime)[0];
   const minInfo = minRow ? { match: `Q${minRow.matchNum}` } : null;
-  document.getElementById('evt-stats').innerHTML = renderStats(cts, ds, schedCts, minInfo);
+  document.getElementById('evt-stats').innerHTML = renderStats(cts, ds, schedCts, minInfo)
+    + (rows.matchesPerTeam ? statCard(rows.matchesPerTeam, 'Matches / Team') : '');
 
   if (cts.length) {
     mkChart('evt-dist', distChartConfig(cts));
