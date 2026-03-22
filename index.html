@@ -157,7 +157,10 @@ button.btn-primary { border: none; }
 .match-table tr.break-row td { text-align: center; color: var(--muted); font-style: italic; font-size: 0.78rem; padding: 3px; background: var(--bg); }
 .match-table tr:hover:not(.break-row) td { background: rgba(59,130,246,0.04); }
 .match-table tr.outlier-row td { color: var(--muted); }
+.match-table tr.replay-row td { color: var(--muted); }
+.match-table tr.replay-row td:first-child { color: var(--warning); }
 .outlier-badge { font-size: 0.7rem; color: var(--muted); margin-left: 4px; font-style: italic; }
+.replay-badge { font-size: 0.7rem; color: var(--warning); margin-left: 5px; font-weight: 600; letter-spacing: 0.02em; }
 .muted-cell { color: var(--muted); }
 
 /* ── Aggregate event table ────────────────────────────────────────────────── */
@@ -360,6 +363,7 @@ function processMatches(data) {
   for (const r of rows) {
     if (!r.actual) continue;
     if (rows.some(r2 => r2.actual && r2.matchNum > r.matchNum && r2.actual < r.actual)) {
+      r.isReplay = true;
       r.delta = null;      // exclude from Δ schedule chart
       r.cycleTime = null;  // gap against previous match is meaningless
       r.isOutlier = true;
@@ -907,14 +911,14 @@ function renderEventResults(rows) {
     const r = rows[i];
     if (r.isPostBreak && i > 0) tbl += '<tr class="break-row"><td colspan="6">— break —</td></tr>';
     const d = fmtDeltaObj(r.delta);
-    const outlierCls = r.isOutlier ? ' outlier-row' : '';
-    tbl += `<tr class="${outlierCls}">
-      <td><strong>Q${r.matchNum}</strong></td>
+    const rowCls = r.isReplay ? ' replay-row' : r.isOutlier ? ' outlier-row' : '';
+    tbl += `<tr class="${rowCls}">
+      <td><strong>Q${r.matchNum}</strong>${r.isReplay ? '<span class="replay-badge">REPLAY</span>' : ''}</td>
       <td class="muted-cell">${fmtTime(r.scheduled)}</td>
       <td>${r.actual ? fmtTime(r.actual) : '<span class="muted-cell">not played</span>'}</td>
       <td class="${d.cls}">${d.text}</td>
       <td class="muted-cell">${fmtDur(r.scheduledCT)}</td>
-      <td class="${r.cycleTime == null ? 'muted-cell' : ''}">${fmtDur(r.cycleTime)}${r.isOutlier ? '<span class="outlier-badge">(outlier)</span>' : ''}</td>
+      <td class="${r.cycleTime == null ? 'muted-cell' : ''}">${fmtDur(r.cycleTime)}${r.isOutlier && !r.isReplay ? '<span class="outlier-badge">(outlier)</span>' : ''}</td>
     </tr>`;
   }
   tbl += '</tbody></table>';
