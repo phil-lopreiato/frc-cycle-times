@@ -1584,8 +1584,16 @@ function initTypeahead() {
   const inp = document.getElementById('eventCode');
   const dd  = document.getElementById('typeaheadDropdown');
   if (!inp || !dd) return;
-  inp.addEventListener('focus',  () => ensureSearchIndex());
-  inp.addEventListener('input',  () => { taActive = -1; showTypeahead(inp.value.trim()); });
+  inp.addEventListener('focus', () => ensureSearchIndex());
+  inp.addEventListener('input', () => {
+    taActive = -1;
+    const q = inp.value.trim();
+    if (searchIndex !== null) {
+      showTypeahead(q);
+    } else {
+      ensureSearchIndex().then(() => showTypeahead(q));
+    }
+  });
   inp.addEventListener('keydown', e => {
     const items = dd.querySelectorAll('.typeahead-item');
     if (e.key === 'ArrowDown') {
