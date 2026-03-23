@@ -761,6 +761,59 @@ function fmtDur(s) {
   s = Math.round(Math.abs(s));
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
+function csvVal(v) {
+  if (v == null) return '';
+  const s = String(v);
+  return s.includes(',') || s.includes('"') || s.includes('\n') ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function downloadCsv(filename, headers, dataRows) {
+  const lines = [headers.map(csvVal).join(',')];
+  for (const row of dataRows) lines.push(row.map(csvVal).join(','));
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+window.exportEventCsv = function() {
+  if (!aggState?._eventCode || !aggState?._rows) return;
+  const rows = aggState._rows;
+  const headers = ['Match','Scheduled (unix)','Actual (unix)','Scheduled CT (s)','Cycle Time (s)','Delta Schedule (s)','Is Outlier','Is Replay'];
+  const data = rows.map(r => [
+    `Q${r.matchNum}`, r.scheduled || '', r.actual || '',
+    r.scheduledCT != null ? Math.round(r.scheduledCT) : '',
+    r.cycleTime   != null ? Math.round(r.cycleTime)   : '',
+    r.delta       != null ? Math.round(r.delta)        : '',
+    r.isOutlier ? 1 : 0, r.isReplay ? 1 : 0,
+  ]);
+  downloadCsv(`${aggState._eventCode}_matches.csv`, headers, data);
+};
+window.exportAggCsv = function() {
+  if (!aggState) return;
+  const { events, allRows, excluded } = aggState;
+  const headers = ['Event Key','Event Name','Week','City','State','Matches Played',
+    'Avg Sched CT (s)','Mean CT (s)','Median CT (s)','Std Dev (s)','Avg Delta (s)'];
+  const data = [];
+  for (let i = 0; i < events.length; i++) {
+    if (excluded.has(i)) continue;
+    const e = events[i];
+    const cts = cycleTimes(allRows[i]), ds = deltas(allRows[i]), sc = scheduledCycleTimes(allRows[i]);
+    const played = allRows[i] ? allRows[i].filter(r => r.actual).length : 0;
+    data.push([
+      e.key, e.name, eventWeekLabel(e),
+      e.city || '', e.state_prov || '',
+      played,
+      sc.length  ? Math.round(mean(sc))     : '',
+      cts.length ? Math.round(mean(cts))    : '',
+      cts.length ? Math.round(median(cts))  : '',
+      cts.length ? Math.round(stddev(cts))  : '',
+      ds.length  ? Math.round(mean(ds))     : '',
+    ]);
+  }
+  const slug = aggState.csvSlug || (aggState.seasonYear ? `${aggState.seasonYear}_season` : 'export');
+  downloadCsv(`${slug}_events.csv`, headers, data);
+};
 function fmtDeltaObj(s) {
   if (s == null) return { text: '—', cls: '' };
   const abs = Math.round(Math.abs(s));
@@ -1137,7 +1190,10 @@ async function viewEvent(code) {
         <div class="card"><h2>Ahead / Behind Schedule</h2><div class="chart-wrap"><canvas id="evt-sched"></canvas></div></div>
       </div>
       <div class="card">
-        <h2>Match Log</h2>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <h2 style="margin-bottom:0">Match Log</h2>
+          <button class="btn-ghost" onclick="exportEventCsv()">⬇ Export CSV</button>
+        </div>
         <div class="table-wrap" id="evt-table"></div>
       </div>
     </div>`);
@@ -1180,6 +1236,11 @@ async function viewEvent(code) {
       (eventData.start_date ? '  ·  ' + eventData.start_date : '') +
       (teamCount ? `  ·  ${teamCount} teams` : '') +
       weekLink;
+
+    // Store for CSV export
+    aggState = aggState || {};
+    aggState._eventCode = code;
+    aggState._rows = rows;
 
     renderEventResults(rows, eventData.timezone);
 
@@ -1226,7 +1287,8 @@ async function viewWeek(year, weekNum) {
     const dateStr = dates.length
       ? fmtDate(dates[0]) + (dates[dates.length-1] !== dates[0] ? ' – ' + fmtDate(dates[dates.length-1]) : '')
       : '';
-    renderAggregatePage(weekLabel, dateStr, backHref, weekEvents, allRows, 'per-event');
+    const csvSlug = isCmpWeek ? `${year}_cmp` : `${year}_week${weekNum}`;
+    renderAggregatePage(weekLabel, dateStr, backHref, weekEvents, allRows, 'per-event', null, csvSlug);
 
     const today = new Date().toISOString().slice(0, 10);
     const liveWeekEvents = weekEvents.filter(e => e.start_date && e.end_date && e.start_date <= today && e.end_date >= today);
@@ -1257,15 +1319,15 @@ async function viewOverall(year) {
       const el = document.getElementById('load-progress');
       if (el) el.textContent = `(${d}/${t})`;
     });
-    renderAggregatePage(`${year} Season`, 'All districts & regionals', backHref, events, allRows, 'per-week', year);
+    renderAggregatePage(`${year} Season`, 'All districts & regionals', backHref, events, allRows, 'per-week', year, `${year}_season`);
   } catch (e) {
     setApp(`<a href="${backHref}" class="back-btn">← All Events</a><div class="error">Error: ${e.message}</div>`);
   }
 }
 
 // ── Shared aggregate renderer ─────────────────────────────────────────────────
-function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaChartMode, seasonYear) {
-  aggState = { events, allRows, excluded: new Set(), deltaChartMode, sortCol: null, sortDir: 'asc', seasonYear: seasonYear || null };
+function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaChartMode, seasonYear, csvSlug) {
+  aggState = { events, allRows, excluded: new Set(), deltaChartMode, sortCol: null, sortDir: 'asc', seasonYear: seasonYear || null, csvSlug: csvSlug || null };
 
   function pooled() {
     const cts = [], ds = [], schedCts = [];
@@ -1312,7 +1374,10 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
     </div>
     ${deltaChartMode === 'per-week' ? '<div class="card"><h2>Avg Cycle Time by Week</h2><div class="chart-wrap"><canvas id="agg-week-ct"></canvas></div></div>' : ''}
     <div class="card">
-      <h2>By Event</h2>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h2 style="margin-bottom:0">By Event</h2>
+        <button class="btn-ghost" onclick="exportAggCsv()">⬇ Export CSV</button>
+      </div>
       <div class="table-wrap" id="agg-table-wrap">${renderAggTable(events, allRows, aggState.excluded, aggState.sortCol, aggState.sortDir)}</div>
     </div>`;
   setApp(html);
