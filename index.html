@@ -411,12 +411,10 @@ function processMatches(data) {
       if (schedGap != null && schedGap > BREAK_GAP) isPostBreak = true;
       else scheduledCT = schedGap;
     }
-    const crossDay = m.time && m.actual_time &&
-      new Date(m.time * 1000).toISOString().slice(0, 10) !== new Date(m.actual_time * 1000).toISOString().slice(0, 10);
     const delta = (m.time && m.actual_time) ? m.time - m.actual_time : null;
     return { matchNum: m.match_number, scheduled: m.time, actual: m.actual_time,
              cycleTime: null, scheduledCT, isPostBreak,
-             delta: crossDay ? null : delta, isOutlier: !!crossDay, isReplay: false };
+             delta, isOutlier: false, isReplay: false };
   });
 
   // Compute cycle times in actual play order; only override isPostBreak from actual gaps
@@ -772,9 +770,11 @@ function fmtDeltaObj(s) {
   if (s >= -900) return { text: '−' + str,  cls: 'warning' }; // 5–15 min behind: yellow
   return                { text: '−' + str,  cls: 'behind' };   // >15 min behind: red
 }
-function fmtTime(u) {
+function fmtTime(u, tz) {
   if (!u) return '—';
-  return new Date(u * 1000).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  const opts = { hour: 'numeric', minute: '2-digit', hour12: true };
+  if (tz) opts.timeZone = tz;
+  return new Date(u * 1000).toLocaleTimeString('en-US', opts);
 }
 function fmtDate(d) {
   if (!d) return '';
@@ -947,7 +947,7 @@ async function viewHome(year) {
 }
 
 // ── VIEW: Event detail ────────────────────────────────────────────────────────
-function renderEventResults(rows) {
+function renderEventResults(rows, tz) {
   const cts = cycleTimes(rows), ds = deltas(rows), schedCts = scheduledCycleTimes(rows);
   const minRow  = rows.filter(r => r.cycleTime != null && !r.isOutlier).sort((a, b) => a.cycleTime - b.cycleTime)[0];
   const minInfo = minRow ? { match: `Q${minRow.matchNum}` } : null;
@@ -1026,7 +1026,16 @@ function renderEventResults(rows) {
 
   const replayNums = new Set(rows.filter(r => r.isReplay).map(r => r.matchNum));
   let prevActualMatchNum = -1; // track last non-replay played match number
-  let tbl = '<table class="match-table"><thead><tr><th>Match</th><th>Scheduled</th><th>Actual</th><th>Δ Schedule</th><th>Sched CT</th><th>Cycle Time</th></tr></thead><tbody>';
+  // Build timezone abbreviation for column header
+  const tzLabel = tz ? (() => {
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' })
+        .formatToParts(new Date());
+      return parts.find(p => p.type === 'timeZoneName')?.value || '';
+    } catch { return ''; }
+  })() : '';
+  const timeHdr = tzLabel ? `${tzLabel}` : 'Time';
+  let tbl = `<table class="match-table"><thead><tr><th>Match</th><th>Scheduled (${timeHdr})</th><th>Actual (${timeHdr})</th><th>Δ Schedule</th><th>Sched CT</th><th>Cycle Time</th></tr></thead><tbody>`;
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     // Detect replay gap: consecutive non-replay played matches with a match-number gap
@@ -1046,8 +1055,8 @@ function renderEventResults(rows) {
     const rowCls = r.isReplay ? ' replay-row' : r.isOutlier ? ' outlier-row' : '';
     tbl += `<tr class="${rowCls}">
       <td><strong>Q${r.matchNum}</strong>${r.isReplay ? '<span class="replay-badge">REPLAY</span>' : ''}</td>
-      <td class="muted-cell">${fmtTime(r.scheduled)}</td>
-      <td>${r.actual ? fmtTime(r.actual) : '<span class="muted-cell">not played</span>'}</td>
+      <td class="muted-cell">${fmtTime(r.scheduled, tz)}</td>
+      <td>${r.actual ? fmtTime(r.actual, tz) : '<span class="muted-cell">not played</span>'}</td>
       <td class="${d.cls}">${d.text}</td>
       <td class="muted-cell">${fmtDur(r.scheduledCT)}</td>
       <td class="${r.cycleTime == null ? 'muted-cell' : ''}">${fmtDur(r.cycleTime)}${r.isOutlier && !r.isReplay ? '<span class="outlier-badge">(outlier)</span>' : ''}</td>
@@ -1172,7 +1181,7 @@ async function viewEvent(code) {
       (teamCount ? `  ·  ${teamCount} teams` : '') +
       weekLink;
 
-    renderEventResults(rows);
+    renderEventResults(rows, eventData.timezone);
 
     if (isLive) {
       refreshTimer = setInterval(async () => {
