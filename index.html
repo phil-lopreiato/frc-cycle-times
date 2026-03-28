@@ -567,8 +567,10 @@ async function getLiveCtData(eventKey, bustCache) {
     return liveCtCache[eventKey];
   }
   const rows = await fetchEventRows(eventKey, bustCache);
-  const ct   = computeLiveCts(rows);
-  const result = { ct, loadedAt: Date.now() };
+  const ct     = computeLiveCts(rows);
+  const played = rows ? rows.filter(r => r.actual).length : 0;
+  const total  = rows ? rows.length : 0;
+  const result = { ct, played, total, loadedAt: Date.now() };
   liveCtCache[eventKey] = result;
   return result;
 }
@@ -731,7 +733,7 @@ function buildLiveCtBlock(data) {
   if (!data || !data.ct) {
     return `<div class="live-no-data">No qual matches yet</div>`;
   }
-  const { ct } = data;
+  const { ct, played, total } = data;
 
   const matchWord    = ct.recentMatchN === 1 ? '1 match' : `${ct.recentMatchN} matches`;
   const recentLabel  = ct.recentMatchN < 5 ? `Last ${matchWord}` : 'Last 5 matches';
@@ -749,9 +751,17 @@ function buildLiveCtBlock(data) {
         <span class="live-ct-label">${recentLabel}</span>
        </div>`
     : '';
+  const matchProgressHtml = (played != null && total != null && total > 0)
+    ? `<span style="color:var(--border);font-size:0.8rem;align-self:center">|</span>
+       <div class="live-ct-item">
+         <span class="live-ct-value" style="color:var(--muted)">${played} / ${total}</span>
+         <span class="live-ct-label">Quals played</span>
+       </div>`
+    : '';
   return `<div class="live-ct-stats">
     ${schedHtml}
     ${recentHtml}
+    ${matchProgressHtml}
   </div>`;
 }
 
