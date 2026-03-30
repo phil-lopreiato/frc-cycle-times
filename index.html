@@ -9,13 +9,13 @@
 :root {
   --bg: #FAFAFA; --surface: #FFFFFF; --text: #1A1A1A;
   --muted: #6B7280; --border: #D1D5DB; --accent: #3B82F6;
-  --success: #10B981; --warning: #F59E0B; --error: #EF4444;
+  --success: #10B981; --warning: #F59E0B; --error: #EF4444; --orange: #F97316;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #0F0F0F; --surface: #1A1A1A; --text: #F0F0F0;
     --muted: #9CA3AF; --border: #374151; --accent: #3B82F6;
-    --success: #10B981; --warning: #F59E0B; --error: #EF4444;
+    --success: #10B981; --warning: #F59E0B; --error: #EF4444; --orange: #F97316;
   }
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -81,9 +81,10 @@ button.btn-primary { border: none; }
 .stat-value { font-size: 1.4rem; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .stat-label { font-size: 0.7rem; color: var(--muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.03em; }
 .stat-sub   { font-size: 0.7rem; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
-.ahead   { color: var(--success); }
-.warning { color: var(--warning); }
-.behind  { color: var(--error); }
+.ahead      { color: var(--success); }
+.early-warn { color: var(--orange); }
+.warning    { color: var(--warning); }
+.behind     { color: var(--error); }
 
 /* ── Charts ───────────────────────────────────────────────────────────────── */
 .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
@@ -828,7 +829,9 @@ function fmtDeltaObj(s) {
   if (s == null) return { text: '—', cls: '' };
   const abs = Math.round(Math.abs(s));
   const str = Math.floor(abs / 60) + ':' + String(abs % 60).padStart(2, '0');
-  if (s >= 0)    return { text: '+' + str,  cls: 'ahead' };   // ahead of schedule
+  if (s > 600)   return { text: '+' + str,  cls: 'behind' };      // >10 min early: red
+  if (s > 300)   return { text: '+' + str,  cls: 'early-warn' };  // 5–10 min early: orange
+  if (s >= 0)    return { text: '+' + str,  cls: 'ahead' };       // ≤5 min early: green
   if (s >= -300) return { text: '−' + str,  cls: 'ahead' };   // ≤5 min behind: green
   if (s >= -900) return { text: '−' + str,  cls: 'warning' }; // 5–15 min behind: yellow
   return                { text: '−' + str,  cls: 'behind' };   // >15 min behind: red
