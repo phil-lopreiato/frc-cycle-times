@@ -521,6 +521,17 @@ function scheduledCycleTimes(rows) {
 }
 function deltas(rows)     { return (rows || []).filter(r => r.delta != null).map(r => r.delta); }
 
+// Returns a hex color for a schedule delta value in minutes.
+// Positive = early (ahead), negative = late (behind).
+function schedDeltaColor(dMin, alpha) {
+  const a = alpha || '';
+  if (dMin > 10)  return '#ef4444' + a;  // >10 min early: red
+  if (dMin > 5)   return '#f97316' + a;  // 5–10 min early: orange
+  if (dMin >= -5) return '#10b981' + a;  // ≤5 min early/behind: green
+  if (dMin >= -15) return '#f59e0b' + a; // 5–15 min behind: yellow
+  return                 '#ef4444' + a;  // >15 min behind: red
+}
+
 // ── Live CT computation ──────────────────────────────────────────────────────
 // Returns { overall, recent, recentMatchN, recentGapN } from already-processed rows
 // overall = mean of all cycle times
@@ -1058,7 +1069,7 @@ function renderEventResults(rows, tz) {
       const d = +(schedRows[i].delta / 60).toFixed(2);
       allDvals.push(d);
       allLabels.push(schedRows[i].matchNum);
-      allPtColors.push(d >= -5 ? '#10b981' : d >= -15 ? '#f59e0b' : '#ef4444');
+      allPtColors.push(schedDeltaColor(d));
     }
     mkChart('evt-sched', {
       type: 'line',
@@ -1428,7 +1439,7 @@ function renderPerEventDeltaChart(eventsWithData, allEvents, allRows) {
     const avg  = mean(ds) / 60;
     labels.push(e.name.replace(/\s*\d{4}\s*/, '').trim().slice(0, 28));
     data.push(+avg.toFixed(2));
-    colors.push(avg >= 0 ? '#10b981b3' : '#ef4444b3');
+    colors.push(schedDeltaColor(avg, 'b3'));
   }
   if (!labels.length) return;
   mkChart('agg-delta', {
@@ -1460,7 +1471,7 @@ function renderPerWeekDeltaChart(events, allRows) {
   });
   const labels = weeks.map(w => weekKeyLabel(w));
   const data   = weeks.map(w => byWeek[w].length ? +(mean(byWeek[w]) / 60).toFixed(2) : null);
-  const colors = data.map(d => d == null ? '#88888866' : d >= 0 ? '#10b981b3' : '#ef4444b3');
+  const colors = data.map(d => d == null ? '#88888866' : schedDeltaColor(d, 'b3'));
   mkChart('agg-delta', {
     type: 'bar',
     data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: colors.map(c => c.replace('b3','')), borderWidth: 1 }] },
