@@ -261,6 +261,7 @@ function route() {
   if (page === 'district') {
     const districtKey = parts[1];
     if (!districtKey) return viewHome(CURRENT_YEAR);
+    if (parts[2] === 'overall') return viewDistrictOverall(districtKey);
     if (parts[2]) return viewDistrictWeek(districtKey, parts[2] === 'cmp' ? 'cmp' : parseInt(parts[2], 10));
     return viewDistrictHome(districtKey);
   }
@@ -1487,6 +1488,9 @@ async function viewDistrictHome(districtKey) {
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <h1>⏱ ${distName} ${year} Cycle Times</h1>
         </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <a href="#district/${districtKey}/overall" class="btn-primary">📊 Overall District</a>
+        </div>
       </div>
       <div class="card" style="margin-bottom:16px">
         <div class="input-row">
@@ -1567,6 +1571,32 @@ async function viewDistrictWeek(districtKey, weekNum) {
         aggState.redraw();
       }, 60000);
     }
+  } catch (e) {
+    setApp(`<a href="${backHref}" class="back-btn">← District Events</a><div class="error">Error: ${e.message}</div>`);
+  }
+}
+
+// ── VIEW: District overall ────────────────────────────────────────────────────
+async function viewDistrictOverall(districtKey) {
+  const year = parseInt(districtKey, 10) || CURRENT_YEAR;
+  const backHref = `#district/${districtKey}`;
+  document.title = `FRC ${year} District Cycle Times`;
+  setApp(`<a href="${backHref}" class="back-btn">← District Events</a>
+    <div class="loading">Loading all district events… <span id="load-progress"></span></div>`);
+  try {
+    const [events, districts] = await Promise.all([
+      fetchEvents(year),
+      fetchDistricts(year),
+    ]);
+    const district   = districts.find(d => d.key === districtKey);
+    const distName   = district?.display_name || districtKey;
+    const distEvents = events.filter(e => e.district?.key === districtKey);
+    if (!distEvents.length) throw new Error(`No events found for district ${districtKey}`);
+    const allRows = await fetchManyEvents(distEvents, (d, t) => {
+      const el = document.getElementById('load-progress');
+      if (el) el.textContent = `(${d}/${t})`;
+    });
+    renderAggregatePage(`${distName} – ${year} Season`, 'All district events', backHref, distEvents, allRows, 'per-week', null, `${districtKey}_season`);
   } catch (e) {
     setApp(`<a href="${backHref}" class="back-btn">← District Events</a><div class="error">Error: ${e.message}</div>`);
   }
