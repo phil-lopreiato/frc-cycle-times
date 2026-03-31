@@ -258,6 +258,13 @@ function route() {
   if (page === 'week')    return viewWeek(parseInt(parts[1], 10), parts[2] === 'cmp' ? 'cmp' : parseInt(parts[2], 10));
   if (page === 'overall') return viewOverall(CURRENT_YEAR);
   if (page === 'season')  return viewOverall(parseInt(parts[1], 10) || CURRENT_YEAR);
+  if (page === 'district') {
+    const districtKey = parts[1];
+    if (!districtKey) return viewHome(CURRENT_YEAR);
+    if (parts[2] === 'overall') return viewDistrictOverall(districtKey);
+    if (parts[2]) return viewDistrictWeek(districtKey, parts[2] === 'cmp' ? 'cmp' : parseInt(parts[2], 10));
+    return viewDistrictHome(districtKey);
+  }
   viewHome(CURRENT_YEAR);
 }
 
@@ -361,6 +368,18 @@ async function fetchEvents(year) {
     .sort((a, b) => (a.week ?? 99) - (b.week ?? 99) || a.name.localeCompare(b.name));
   lsSet(`events_${year}`, eventsCache[year], isPast ? null : 60 * 60 * 1000);
   return eventsCache[year];
+}
+
+async function fetchDistricts(year) {
+  const isPast = year < CURRENT_YEAR;
+  const cached = lsGet(`districts_${year}`);
+  if (cached) return cached;
+  const r = await fetch(tbaUrl(`/api/v3/districts/${year}`));
+  if (!r.ok) return [];
+  const districts = await r.json();
+  const sorted = districts.sort((a, b) => a.display_name.localeCompare(b.display_name));
+  lsSet(`districts_${year}`, sorted, isPast ? null : 60 * 60 * 1000);
+  return sorted;
 }
 
 async function fetchEventRows(code, bustCache) {
@@ -727,6 +746,86 @@ function rerenderHomeEventLists() {
   container.innerHTML = html;
 }
 
+function renderDistrictEventLists(districtKey, distEvents, year) {
+  const container = document.getElementById('districtEventListsContainer');
+  if (!container) return;
+  const today = new Date().toISOString().slice(0, 10);
+
+  const byWeek = {};
+  for (const e of distEvents) {
+    const w = eventWeekKey(e);
+    (byWeek[w] = byWeek[w] || []).push(e);
+  }
+  const weekKeys = Object.keys(byWeek).sort((a, b) => {
+    if (a === 'cmp') return 0.5;
+    if (b === 'cmp') return -0.5;
+    if (a === 'other') return 1; if (b === 'other') return -1;
+    return Number(a) - Number(b);
+  });
+
+  let html = '';
+  for (const wk of weekKeys) {
+    const isCmpWk = wk === 'cmp';
+    const weekNum = (wk === 'other' || isCmpWk) ? null : Number(wk) + 1;
+    const evts    = byWeek[wk];
+    const label   = isCmpWk ? 'Championship' : weekNum ? `Week ${weekNum}` : 'Other';
+    const weekHref = isCmpWk
+      ? `#district/${districtKey}/cmp`
+      : weekNum ? `#district/${districtKey}/${weekNum}` : null;
+
+    const dates   = evts.map(e => e.start_date).filter(Boolean).sort();
+    const dateStr = dates.length
+      ? fmtDate(dates[0]) + (dates[dates.length - 1] !== dates[0] ? ' – ' + fmtDate(dates[dates.length - 1]) : '')
+      : '';
+
+    html += `<div class="week-section">
+      <div class="week-header">
+        <div>
+          <span class="week-label">${label}</span>
+          ${dateStr ? `<span class="week-dates">${dateStr}</span>` : ''}
+        </div>
+        ${weekHref ? `<a href="${weekHref}" class="btn-secondary">View Week Aggregate →</a>` : ''}
+      </div>
+      <div class="event-list">`;
+
+    for (const e of evts) {
+      const st     = eventStatus(e);
+      const isLive = e.start_date <= today && e.end_date >= today;
+      const cached = isLive ? liveCtCache[e.key] : null;
+      let liveBlock = '';
+
+      if (isLive) {
+        if (!cached) {
+          liveBlock = `<div class="live-loading" id="livect-${e.key}"><span class="refresh-spinner"></span> Loading…</div>`;
+          getLiveCtData(e.key, false).then(data => {
+            const el = document.getElementById(`livect-${e.key}`);
+            if (el) el.outerHTML = buildLiveCtBlock(data);
+          }).catch(() => {
+            const el = document.getElementById(`livect-${e.key}`);
+            if (el) el.outerHTML = `<div class="live-no-data">Unable to load data</div>`;
+          });
+        } else {
+          liveBlock = buildLiveCtBlock(cached);
+        }
+      }
+
+      html += `<div class="event-row">
+        <div class="event-row-info">
+          <span class="event-row-name">${e.name} <span style="color:var(--muted);font-weight:400">(${e.key})</span></span>
+          <span class="event-row-loc">${[e.city, e.state_prov].filter(Boolean).join(', ')}</span>
+          ${liveBlock}
+        </div>
+        <div class="event-row-right">
+          <span class="event-status ${st.cls}">${st.label}</span>
+          <a href="#event/${e.key}" class="btn-ghost">View →</a>
+        </div>
+      </div>`;
+    }
+    html += `</div></div>`;
+  }
+  container.innerHTML = html;
+}
+
 const ICON_OK      = `<svg width="13" height="13" viewBox="0 0 13 13" style="vertical-align:-1px;margin-right:2px" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="6.5" cy="6.5" r="5.5" fill="#10B981"/><polyline points="3.5,6.5 5.5,8.5 9.5,4.5" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const ICON_WARNING = `<svg width="13" height="13" viewBox="0 0 13 13" style="vertical-align:-1px;margin-right:2px" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1.5 10.5L6.5 2.5L11.5 10.5H1.5Z" fill="#F59E0B" stroke="#F59E0B" stroke-linejoin="round"/><text x="6.5" y="10" text-anchor="middle" font-size="7" font-weight="bold" fill="white" font-family="sans-serif">!</text></svg>`;
 const ICON_DANGER  = `<svg width="13" height="13" viewBox="0 0 13 13" style="vertical-align:-1px;margin-right:2px" fill="none" xmlns="http://www.w3.org/2000/svg"><polygon points="4,1 9,1 12,4 12,9 9,12 4,12 1,9 1,4" fill="#EF4444" stroke="#EF4444" stroke-linejoin="round"/><text x="6.5" y="9.5" text-anchor="middle" font-size="7" font-weight="bold" fill="white" font-family="sans-serif">!</text></svg>`;
@@ -1002,13 +1101,31 @@ async function viewHome(year) {
       const lbl = isCmpWk ? `CMP${dateStr}` : `Week ${val}${dateStr}`;
       html += `<option value="${val}">${lbl}</option>`;
     }
-    html += `</select></div></div></div>
+    html += `</select></div>
+          <div class="field" style="min-width:160px">
+            <label>Jump to District</label>
+            <select id="homeDistrictSelect" onchange="if(this.value) location.hash='#district/'+this.value" style="width:100%">
+              <option value="">Select district…</option>
+            </select>
+          </div></div></div>
       <div id="eventListsContainer"></div>`;
 
     setApp(html);
 
     searchIndex = events.map(e => ({ key: e.key, value: e.name }));
     initHomeTypeahead();
+
+    // Populate district dropdown asynchronously
+    fetchDistricts(year).then(districts => {
+      const sel = document.getElementById('homeDistrictSelect');
+      if (!sel) return;
+      if (!districts.length) { sel.closest('.field').style.display = 'none'; return; }
+      sel.innerHTML = `<option value="">Select district…</option>` +
+        districts.map(d => `<option value="${d.key}">${d.display_name}</option>`).join('');
+    }).catch(() => {
+      const sel = document.getElementById('homeDistrictSelect');
+      if (sel) sel.closest('.field').style.display = 'none';
+    });
 
     // Render event lists (uses rerenderHomeEventLists for DRY)
     rerenderHomeEventLists();
@@ -1346,6 +1463,142 @@ async function viewOverall(year) {
     renderAggregatePage(`${year} Season`, 'All districts & regionals', backHref, events, allRows, 'per-week', year, `${year}_season`);
   } catch (e) {
     setApp(`<a href="${backHref}" class="back-btn">← All Events</a><div class="error">Error: ${e.message}</div>`);
+  }
+}
+
+// ── VIEW: District home ───────────────────────────────────────────────────────
+async function viewDistrictHome(districtKey) {
+  const year = parseInt(districtKey, 10) || CURRENT_YEAR;
+  const backHref = year === CURRENT_YEAR ? '#home' : `#home/${year}`;
+  document.title = `FRC ${year} Cycle Times`;
+  setApp('<div class="loading">Loading events…</div>');
+  try {
+    const [events, districts] = await Promise.all([
+      fetchEvents(year),
+      fetchDistricts(year),
+    ]);
+    const district  = districts.find(d => d.key === districtKey);
+    const distName  = district?.display_name || districtKey;
+    const distEvents = events.filter(e => e.district?.key === districtKey);
+    if (!distEvents.length) throw new Error(`No events found for district ${districtKey}`);
+
+    let html = `
+      <a href="${backHref}" class="back-btn">← All Events</a>
+      <div class="home-header">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <h1>⏱ ${distName} ${year} Cycle Times</h1>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <a href="#district/${districtKey}/overall" class="btn-primary">📊 Overall District</a>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <div class="input-row">
+          <div class="field" style="min-width:160px">
+            <label>Jump to Week</label>
+            <select onchange="if(this.value) location.hash='#district/${districtKey}/'+this.value" style="width:100%">
+              <option value="">Select week…</option>`;
+
+    const byWeekForSelect = {};
+    for (const e of distEvents) {
+      const w = eventWeekKey(e);
+      (byWeekForSelect[w] = byWeekForSelect[w] || []).push(e);
+    }
+    const weekKeysForSelect = Object.keys(byWeekForSelect).sort((a, b) => {
+      if (a === 'cmp') return 0.5; if (b === 'cmp') return -0.5;
+      if (a === 'other') return 1; if (b === 'other') return -1;
+      return Number(a) - Number(b);
+    });
+    for (const wk of weekKeysForSelect.filter(w => w !== 'other')) {
+      const isCmpWk = wk === 'cmp';
+      const val  = isCmpWk ? 'cmp' : Number(wk) + 1;
+      const evts = byWeekForSelect[wk];
+      const dates = evts.map(e => e.start_date).filter(Boolean).sort();
+      const dateStr = dates.length ? ' · ' + fmtDate(dates[0]) : '';
+      const lbl  = isCmpWk ? `CMP${dateStr}` : `Week ${val}${dateStr}`;
+      html += `<option value="${val}">${lbl}</option>`;
+    }
+    html += `</select></div></div></div>
+      <div id="districtEventListsContainer"></div>`;
+
+    setApp(html);
+    renderDistrictEventLists(districtKey, distEvents, year);
+  } catch (e) {
+    setApp(`<a href="${backHref}" class="back-btn">← All Events</a><div class="error">Error: ${e.message}</div>`);
+  }
+}
+
+// ── VIEW: District week aggregate ─────────────────────────────────────────────
+async function viewDistrictWeek(districtKey, weekNum) {
+  const year = parseInt(districtKey, 10) || CURRENT_YEAR;
+  const backHref = `#district/${districtKey}`;
+  const isCmpWeek = weekNum === 'cmp';
+  const weekLabel = isCmpWeek ? 'CMP' : `Week ${weekNum}`;
+  document.title = `${weekLabel} – FRC ${year} District Cycle Times`;
+  setApp(`<a href="${backHref}" class="back-btn">← District Events</a>
+    <div class="loading">Loading ${weekLabel} events… <span id="load-progress"></span></div>`);
+  try {
+    const [events, districts] = await Promise.all([
+      fetchEvents(year),
+      fetchDistricts(year),
+    ]);
+    const district   = districts.find(d => d.key === districtKey);
+    const distName   = district?.display_name || districtKey;
+    const distEvents = events.filter(e => e.district?.key === districtKey);
+    const weekEvents = isCmpWeek
+      ? distEvents.filter(e => isCmp(e))
+      : distEvents.filter(e => (e.week ?? -1) + 1 === weekNum);
+    if (!weekEvents.length) throw new Error(`No events found for ${distName} ${weekLabel}`);
+    const allRows = await fetchManyEvents(weekEvents, (d, t) => {
+      const el = document.getElementById('load-progress');
+      if (el) el.textContent = `(${d}/${t})`;
+    });
+    const dates = weekEvents.map(e => e.start_date).filter(Boolean).sort();
+    const dateStr = dates.length
+      ? fmtDate(dates[0]) + (dates[dates.length - 1] !== dates[0] ? ' – ' + fmtDate(dates[dates.length - 1]) : '')
+      : '';
+    const csvSlug = isCmpWeek ? `${districtKey}_cmp` : `${districtKey}_week${weekNum}`;
+    renderAggregatePage(`${distName} – ${weekLabel}`, dateStr, backHref, weekEvents, allRows, 'per-event', null, csvSlug);
+
+    const today = new Date().toISOString().slice(0, 10);
+    const liveWeekEvents = weekEvents.filter(e => e.start_date && e.end_date && e.start_date <= today && e.end_date >= today);
+    if (liveWeekEvents.length) {
+      refreshTimer = setInterval(async () => {
+        if (!aggState) return;
+        for (const e of liveWeekEvents) delete matchesCache[e.key];
+        const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key)));
+        for (let i = 0; i < weekEvents.length; i++) aggState.allRows[i] = freshRows[i];
+        aggState.redraw();
+      }, 60000);
+    }
+  } catch (e) {
+    setApp(`<a href="${backHref}" class="back-btn">← District Events</a><div class="error">Error: ${e.message}</div>`);
+  }
+}
+
+// ── VIEW: District overall ────────────────────────────────────────────────────
+async function viewDistrictOverall(districtKey) {
+  const year = parseInt(districtKey, 10) || CURRENT_YEAR;
+  const backHref = `#district/${districtKey}`;
+  document.title = `FRC ${year} District Cycle Times`;
+  setApp(`<a href="${backHref}" class="back-btn">← District Events</a>
+    <div class="loading">Loading all district events… <span id="load-progress"></span></div>`);
+  try {
+    const [events, districts] = await Promise.all([
+      fetchEvents(year),
+      fetchDistricts(year),
+    ]);
+    const district   = districts.find(d => d.key === districtKey);
+    const distName   = district?.display_name || districtKey;
+    const distEvents = events.filter(e => e.district?.key === districtKey);
+    if (!distEvents.length) throw new Error(`No events found for district ${districtKey}`);
+    const allRows = await fetchManyEvents(distEvents, (d, t) => {
+      const el = document.getElementById('load-progress');
+      if (el) el.textContent = `(${d}/${t})`;
+    });
+    renderAggregatePage(`${distName} – ${year} Season`, 'All district events', backHref, distEvents, allRows, 'per-week', null, `${districtKey}_season`);
+  } catch (e) {
+    setApp(`<a href="${backHref}" class="back-btn">← District Events</a><div class="error">Error: ${e.message}</div>`);
   }
 }
 
