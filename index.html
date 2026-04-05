@@ -1377,7 +1377,7 @@ function renderEventResults(rows, tz) {
       grid.innerHTML =
         statCard(`Q${nextUp.matchNum}`,  'Next Match') +
         statCard(fmtTime(expectedStart, tz), 'Expected Start') +
-        statCard(`<span class="live-dot" style="display:inline-block;margin-right:4px;vertical-align:middle"></span>${fmtDur(elapsed)}`, 'Current CT', ctCls) +
+        statCard(`<span class="live-dot" style="display:inline-block;margin-right:4px;vertical-align:middle"></span>${fmtDur(elapsed)}`, 'Current CT', ctCls, schedCT != null ? `sched ${fmtDur(schedCT)}` : null) +
         statCard(cdVal, 'Countdown', cdCls, cdSub);
     }
     updateLiveCT();
