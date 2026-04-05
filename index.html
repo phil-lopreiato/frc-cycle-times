@@ -1348,33 +1348,42 @@ function renderEventResults(rows, tz) {
   document.getElementById('evt-table').innerHTML = tbl;
   document.getElementById('evt-results').classList.remove('hidden');
 
-  // ── Live current-CT counter ──────────────────────────────────────────────
+  // ── Live next-match card ─────────────────────────────────────────────────
   if (cycleCTTimer) { clearInterval(cycleCTTimer); cycleCTTimer = null; }
   const lastPlayed = [...rows].reverse().find(r => r.actual);
   const nextUp     = lastPlayed ? rows.find(r => !r.actual && r.matchNum > lastPlayed.matchNum) : null;
-  if (lastPlayed && nextUp && nextUp.scheduled && lastPlayed.scheduled &&
+  const liveCardEl = document.getElementById('evt-live-card');
+  if (liveCardEl && lastPlayed && nextUp && nextUp.scheduled && lastPlayed.scheduled &&
       (nextUp.scheduled - lastPlayed.scheduled) < BREAK_GAP) {
-    const statsEl  = document.getElementById('evt-stats');
-    const liveCard = document.createElement('div');
-    liveCard.className = 'stat';
-    liveCard.id = 'evt-live-ct';
-    statsEl.appendChild(liveCard);
-    const avgCT   = mean(cycleTimes(rows)) || null;
-    const schedCT = nextUp.scheduledCT;
+    const avgCT  = mean(cycleTimes(rows)) || null;
+    const schedCT = nextUp.scheduledCT != null ? nextUp.scheduledCT : avgCT;
+    // Expected start: the later of the scheduled time or last match's actual start + scheduled CT
+    const expectedStart = Math.max(nextUp.scheduled, lastPlayed.actual + (schedCT || 0));
+    liveCardEl.innerHTML =
+      `<div class="card">` +
+        `<h2 style="margin-bottom:10px"><span class="live-dot" style="display:inline-block;margin-right:6px;vertical-align:middle"></span>Next Up</h2>` +
+        `<div class="stats-grid" id="evt-live-grid"></div>` +
+      `</div>`;
     function updateLiveCT() {
-      const el = document.getElementById('evt-live-ct');
-      if (!el) { clearInterval(cycleCTTimer); cycleCTTimer = null; return; }
-      const elapsed = Math.floor(Date.now() / 1000) - lastPlayed.actual;
-      const cls = avgCT && elapsed > avgCT ? 'ct-danger' : '';
-      const schedLine = schedCT != null
-        ? `<div style="font-size:0.72rem;color:var(--muted);margin-top:2px">Sched: ${fmtDur(schedCT)}</div>`
-        : '';
-      el.innerHTML = `<div class="stat-value ${cls}"><span class="live-dot" style="display:inline-block;margin-right:3px;vertical-align:middle"></span>${fmtDur(elapsed)}</div>` +
-                     `<div class="stat-label">Current CT · Q${lastPlayed.matchNum}→Q${nextUp.matchNum}</div>` +
-                     schedLine;
+      const grid = document.getElementById('evt-live-grid');
+      if (!grid) { clearInterval(cycleCTTimer); cycleCTTimer = null; return; }
+      const nowSec   = Math.floor(Date.now() / 1000);
+      const elapsed  = nowSec - lastPlayed.actual;
+      const countdown = expectedStart - nowSec;
+      const ctCls  = avgCT && elapsed > avgCT * 1.1 ? 'ct-danger' : avgCT && elapsed > avgCT ? 'ct-warning' : '';
+      const cdCls  = countdown < 0 ? 'ct-danger' : '';
+      const cdVal  = countdown >= 0 ? fmtDur(countdown) : `+${fmtDur(-countdown)}`;
+      const cdSub  = countdown >= 0 ? 'to expected start' : 'past expected start';
+      grid.innerHTML =
+        statCard(`Q${nextUp.matchNum}`,  'Next Match') +
+        statCard(fmtTime(expectedStart, tz), 'Expected Start') +
+        statCard(`<span class="live-dot" style="display:inline-block;margin-right:4px;vertical-align:middle"></span>${fmtDur(elapsed)}`, 'Current CT', ctCls) +
+        statCard(cdVal, 'Countdown', cdCls, cdSub);
     }
     updateLiveCT();
     cycleCTTimer = setInterval(updateLiveCT, 1000);
+  } else if (liveCardEl) {
+    liveCardEl.innerHTML = '';
   }
 
   const lastEl = document.getElementById('evt-last-updated');
@@ -1413,6 +1422,7 @@ async function viewEvent(code) {
         <h2>Cycle Time Statistics</h2>
         <div class="stats-grid" id="evt-stats"></div>
       </div>
+      <div id="evt-live-card"></div>
       <div class="charts-grid">
         <div class="card"><h2>Distribution</h2><div class="chart-wrap"><canvas id="evt-dist"></canvas></div></div>
         <div class="card"><h2>Ahead / Behind Schedule</h2><div class="chart-wrap"><canvas id="evt-sched"></canvas></div></div>
