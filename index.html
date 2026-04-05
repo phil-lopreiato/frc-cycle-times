@@ -1430,10 +1430,9 @@ function renderEventResults(rows, tz) {
     const schedCT = nextUp.scheduledCT != null ? nextUp.scheduledCT : avgCT;
     // Expected start: the later of the scheduled time or last match's actual start + scheduled CT
     const expectedStart = Math.max(nextUp.scheduled, lastPlayed.actual + (schedCT || 0));
-    const prevCtSub   = lastPlayed.cycleTime != null ? `prev CT ${fmtDur(lastPlayed.cycleTime)}` : null;
-    const startDelta  = fmtDeltaObj(nextUp.scheduled - expectedStart);
-    const startDeltaWord = (nextUp.scheduled - expectedStart) >= 0 ? 'ahead' : 'behind';
-    const startDeltaSub = `<span class="${startDelta.cls}">${startDelta.text} (${startDeltaWord})</span>`;
+    const prevCtSub      = lastPlayed.cycleTime != null ? `prev CT ${fmtDur(lastPlayed.cycleTime)}` : null;
+    const lastDeltaFmt   = fmtDeltaObj(lastPlayed.delta);
+    const lastDeltaWord  = (lastPlayed.delta ?? 0) >= 0 ? 'ahead' : 'behind';
     liveCardEl.innerHTML =
       `<div class="card">` +
         `<h2 style="margin-bottom:10px"><span class="live-dot" style="display:inline-block;margin-right:6px;vertical-align:middle"></span>Next Up</h2>` +
@@ -1451,7 +1450,7 @@ function renderEventResults(rows, tz) {
       const cdSub  = countdown >= 0 ? 'to expected start' : 'past expected start';
       grid.innerHTML =
         statCard(`Q${nextUp.matchNum}`,  'Next Match', '', prevCtSub) +
-        statCard(fmtTime(expectedStart, tz), 'Expected Start', '', startDeltaSub) +
+        statCard(`${lastDeltaFmt.text} (${lastDeltaWord})`, 'Δ Schedule', lastDeltaFmt.cls, `exp. ${fmtTime(expectedStart, tz)}`) +
         statCard(`<span class="live-dot" style="display:inline-block;margin-right:4px;vertical-align:middle"></span>${fmtDur(elapsed)}`, 'Current CT', ctCls, schedCT != null ? `sched ${fmtDur(schedCT)}` : null) +
         statCard(cdVal, 'Countdown', cdCls, cdSub);
     }
