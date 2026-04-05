@@ -1081,8 +1081,7 @@ function renderStats(cts, ds, schedCts, minInfo, outlierCount) {
   return [
     statCard(cts.length,           'In Scope Matches', '', outlierSub),
     statCard(fmtDur(mean(cts)),    'Mean CT'),
-    statCard(fmtDur(median(cts)),  'Median CT'),
-    statCard(fmtDur(stddev(cts)),  'Std Dev CT'),
+    statCard(fmtDur(median(cts)),  'Median CT', '', `σ ${fmtDur(stddev(cts))}`),
     statCard(fmtDur(Math.min(...cts)), 'Min CT', '', minSub),
     schedH,
     deltaH,
