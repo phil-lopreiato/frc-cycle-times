@@ -1858,7 +1858,7 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
         </div>
       </div>
     </div>
-    ${deltaChartMode === 'per-week' ? '<div class="card"><h2>Avg Cycle Time by Week</h2><div class="chart-wrap"><canvas id="agg-week-ct"></canvas></div></div>' : ''}
+    ${deltaChartMode === 'per-week' ? '<div class="card"><h2>Cycle Time by Week</h2><div class="chart-wrap"><canvas id="agg-week-ct"></canvas></div></div>' : ''}
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
         <h2 style="margin-bottom:0">By Event</h2>
@@ -1961,9 +1961,10 @@ function renderPerWeekCtChart(events, allRows, excluded) {
     if (a === 'cmp') return 0.5; if (b === 'cmp') return -0.5;
     if (a === 'other') return 1; if (b === 'other') return -1; return a - b;
   });
-  const labels     = weeks.map(w => weekKeyLabel(w));
-  const actualData = weeks.map(w => byWeek[w].actual.length ? +(mean(byWeek[w].actual) / 60).toFixed(2) : null);
-  const schedData  = weeks.map(w => byWeek[w].sched.length  ? +(mean(byWeek[w].sched)  / 60).toFixed(2) : null);
+  const labels      = weeks.map(w => weekKeyLabel(w));
+  const actualData  = weeks.map(w => byWeek[w].actual.length ? +(mean(byWeek[w].actual)   / 60).toFixed(2) : null);
+  const medianData  = weeks.map(w => byWeek[w].actual.length ? +(median(byWeek[w].actual) / 60).toFixed(2) : null);
+  const schedData   = weeks.map(w => byWeek[w].sched.length  ? +(mean(byWeek[w].sched)    / 60).toFixed(2) : null);
   if (!actualData.some(v => v != null)) return;
   mkChart('agg-week-ct', {
     type: 'line',
@@ -1975,6 +1976,14 @@ function renderPerWeekCtChart(events, allRows, excluded) {
           data: actualData,
           borderColor: '#3b82f6', backgroundColor: '#3b82f618',
           pointRadius: 4, pointBackgroundColor: '#3b82f6',
+          tension: 0.3, fill: false,
+        },
+        {
+          label: 'Median Actual CT',
+          data: medianData,
+          borderColor: '#a78bfa', backgroundColor: '#a78bfa18',
+          borderDash: [4, 3],
+          pointRadius: 4, pointBackgroundColor: '#a78bfa',
           tension: 0.3, fill: false,
         },
         {
