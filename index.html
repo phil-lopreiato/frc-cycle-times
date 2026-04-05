@@ -183,6 +183,7 @@ button.btn-primary { border: none; }
 .agg-table td:first-child { width: 28px; text-align: center; }
 .agg-table td:nth-child(3) a { color: var(--accent); text-decoration: none; font-weight: 500; }
 .agg-table td:nth-child(3) a:hover { text-decoration: underline; }
+.block-table td:first-child { width: auto; text-align: left; }
 
 /* ── Misc ─────────────────────────────────────────────────────────────────── */
 .loading { color: var(--muted); padding: 32px; text-align: center; font-size: 0.9rem; }
@@ -241,6 +242,7 @@ let liveFilterActive = false;     // whether "live events only" filter is on
 let liveRefreshTimer = null;      // interval handle for auto-refresh
 let liveCtCache  = {};            // eventKey → { overall, recent, label, loadedAt }
 let homeYear     = CURRENT_YEAR;  // year currently shown on the home page
+let blocksCardExpanded = false;   // whether the per-block stats card is expanded
 
 // ── Router ───────────────────────────────────────────────────────────────────
 window.addEventListener('hashchange', route);
@@ -1226,6 +1228,73 @@ async function viewHome(year) {
   }
 }
 
+// ── Per-block stats card ──────────────────────────────────────────────────────
+function renderBlocksCard(rows) {
+  // Split rows into schedule blocks based on the isPostBreak flag, in match-number order
+  const sorted = [...rows].sort((a, b) => a.matchNum - b.matchNum);
+  const blocks = [];
+  let current = [];
+  for (const r of sorted) {
+    if (r.isPostBreak && current.length > 0) { blocks.push(current); current = []; }
+    current.push(r);
+  }
+  if (current.length) blocks.push(current);
+
+  const bodyId = 'evt-blocks-body';
+  let body;
+  if (blocks.length < 2) {
+    body = '<p style="color:var(--muted);font-size:0.875rem;margin-top:12px">Not enough schedule blocks to compare.</p>';
+  } else {
+    let tbl = `<div class="table-wrap" style="margin-top:14px">
+      <table class="agg-table block-table"><thead><tr>
+        <th>Block</th><th>Range</th><th>Played</th>
+        <th>Avg Sched CT</th><th>Mean CT</th><th>Median CT</th><th>Std Dev</th><th>Avg Δ Sched</th>
+      </tr></thead><tbody>`;
+    for (let i = 0; i < blocks.length; i++) {
+      const blk      = blocks[i];
+      const cts      = cycleTimes(blk);
+      const ds       = deltas(blk);
+      const schedCts = scheduledCycleTimes(blk);
+      const played   = blk.filter(r => r.actual).length;
+      const first    = blk[0].matchNum;
+      const last     = blk[blk.length - 1].matchNum;
+      const outliers = blk.filter(r => r.cycleTime != null && r.isOutlier).length;
+      const avgD     = ds.length ? fmtDeltaObj(mean(ds)) : { text: '—', cls: '' };
+      const outlierNote = outliers > 0
+        ? ` <span style="color:var(--muted);font-size:0.78rem">(${outliers} outlier${outliers > 1 ? 's' : ''})</span>` : '';
+      tbl += `<tr>
+        <td>Block ${i + 1}</td>
+        <td class="muted-cell">Q${first}–Q${last}</td>
+        <td class="muted-cell">${played}/${blk.length}</td>
+        <td class="muted-cell">${schedCts.length ? fmtDur(mean(schedCts)) : '—'}</td>
+        <td>${cts.length ? fmtDur(mean(cts)) : '—'}${outlierNote}</td>
+        <td>${cts.length ? fmtDur(median(cts)) : '—'}</td>
+        <td class="muted-cell">${cts.length >= 2 ? fmtDur(stddev(cts)) : '—'}</td>
+        <td class="${avgD.cls}">${avgD.text}</td>
+      </tr>`;
+    }
+    tbl += '</tbody></table></div>';
+    body = tbl;
+  }
+
+  const expanded = blocksCardExpanded;
+  return `<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleBlocksCard()">
+      <h2 style="margin-bottom:0">By Schedule Block</h2>
+      <button class="btn-ghost" id="evt-blocks-toggle" onclick="event.stopPropagation();toggleBlocksCard()">${expanded ? 'Hide ▲' : 'Show ▼'}</button>
+    </div>
+    <div id="${bodyId}"${expanded ? '' : ' class="hidden"'}>${body}</div>
+  </div>`;
+}
+
+window.toggleBlocksCard = function() {
+  blocksCardExpanded = !blocksCardExpanded;
+  const body   = document.getElementById('evt-blocks-body');
+  const toggle = document.getElementById('evt-blocks-toggle');
+  if (body)   body.classList.toggle('hidden', !blocksCardExpanded);
+  if (toggle) toggle.textContent = blocksCardExpanded ? 'Hide ▲' : 'Show ▼';
+};
+
 // ── VIEW: Event detail ────────────────────────────────────────────────────────
 function renderEventResults(rows, tz) {
   const cts = cycleTimes(rows), ds = deltas(rows), schedCts = scheduledCycleTimes(rows);
@@ -1347,6 +1416,8 @@ function renderEventResults(rows, tz) {
   tbl += '</tbody></table>';
   document.getElementById('evt-table').innerHTML = tbl;
   document.getElementById('evt-results').classList.remove('hidden');
+  const blocksEl = document.getElementById('evt-blocks-card');
+  if (blocksEl) blocksEl.innerHTML = renderBlocksCard(rows);
 
   // ── Live next-match card ─────────────────────────────────────────────────
   if (cycleCTTimer) { clearInterval(cycleCTTimer); cycleCTTimer = null; }
@@ -1431,6 +1502,7 @@ async function viewEvent(code) {
         <div class="card"><h2>Distribution</h2><div class="chart-wrap"><canvas id="evt-dist"></canvas></div></div>
         <div class="card"><h2>Ahead / Behind Schedule</h2><div class="chart-wrap"><canvas id="evt-sched"></canvas></div></div>
       </div>
+      <div id="evt-blocks-card"></div>
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
           <h2 style="margin-bottom:0">Match Log</h2>
