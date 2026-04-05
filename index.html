@@ -391,8 +391,6 @@ async function fetchDistricts(year) {
 
 async function fetchEventRows(code, bustCache) {
   if (!bustCache && matchesCache[code]) return matchesCache[code];
-  // Only persist completed events (key starts with year we can infer from code, or check end_date)
-  // We check if the event is in a past year or its end_date has passed
   if (!bustCache) {
     const persisted = lsGet(`rows_${code}`);
     if (persisted) {
@@ -405,15 +403,18 @@ async function fetchEventRows(code, bustCache) {
   if (!r.ok) return null;
   const rows = processMatches(await r.json());
   matchesCache[code] = rows;
-  // Persist if the event is completed: key format is YYYYxxx, check year
-  const today = new Date().toISOString().slice(0, 10);
+  // Only persist completed events to avoid serving stale data for live events.
+  // Past years: cache forever. Current year: only once the event's end_date has passed.
   const eventYear = parseInt(code.slice(0, 4), 10);
-  // For past years persist forever; for current year only after all matches have actual times
-  // (heuristic: at least one match played and none without actual_time among played matches)
-  const allPlayed = rows.length > 0 && rows.every(r2 => r2.actual || !r2.scheduled || r2.scheduled > Date.now() / 1000);
-  if (eventYear < CURRENT_YEAR || allPlayed) {
-    lsSet(`rows_${code}`, { rows: Array.from(rows), matchesPerTeam: rows.matchesPerTeam },
-      eventYear < CURRENT_YEAR ? null : 24 * 60 * 60 * 1000);
+  if (eventYear < CURRENT_YEAR) {
+    lsSet(`rows_${code}`, { rows: Array.from(rows), matchesPerTeam: rows.matchesPerTeam }, null);
+  } else {
+    const today = new Date().toISOString().slice(0, 10);
+    const eventObj = (eventsCache[CURRENT_YEAR] || []).find(e => e.key === code);
+    if (eventObj && eventObj.end_date < today) {
+      lsSet(`rows_${code}`, { rows: Array.from(rows), matchesPerTeam: rows.matchesPerTeam }, null);
+    }
+    // Event is still active or unknown — keep only in memory so it refreshes on next load.
   }
   return rows;
 }
@@ -1519,10 +1520,10 @@ async function viewWeek(year, weekNum) {
     const today = new Date().toISOString().slice(0, 10);
     const liveWeekEvents = weekEvents.filter(e => e.start_date && e.end_date && e.start_date <= today && e.end_date >= today);
     if (liveWeekEvents.length) {
+      const liveKeys = new Set(liveWeekEvents.map(e => e.key));
       refreshTimer = setInterval(async () => {
         if (!aggState) return;
-        for (const e of liveWeekEvents) delete matchesCache[e.key];
-        const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key)));
+        const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key, liveKeys.has(e.key))));
         for (let i = 0; i < weekEvents.length; i++) aggState.allRows[i] = freshRows[i];
         aggState.redraw();
       }, 60000);
@@ -1648,10 +1649,10 @@ async function viewDistrictWeek(districtKey, weekNum) {
     const today = new Date().toISOString().slice(0, 10);
     const liveWeekEvents = weekEvents.filter(e => e.start_date && e.end_date && e.start_date <= today && e.end_date >= today);
     if (liveWeekEvents.length) {
+      const liveKeys = new Set(liveWeekEvents.map(e => e.key));
       refreshTimer = setInterval(async () => {
         if (!aggState) return;
-        for (const e of liveWeekEvents) delete matchesCache[e.key];
-        const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key)));
+        const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key, liveKeys.has(e.key))));
         for (let i = 0; i < weekEvents.length; i++) aggState.allRows[i] = freshRows[i];
         aggState.redraw();
       }, 60000);
@@ -1774,10 +1775,10 @@ async function viewRegionalsWeek(year, weekNum) {
     const today = new Date().toISOString().slice(0, 10);
     const liveWeekEvents = weekEvents.filter(e => e.start_date && e.end_date && e.start_date <= today && e.end_date >= today);
     if (liveWeekEvents.length) {
+      const liveKeys = new Set(liveWeekEvents.map(e => e.key));
       refreshTimer = setInterval(async () => {
         if (!aggState) return;
-        for (const e of liveWeekEvents) delete matchesCache[e.key];
-        const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key)));
+        const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key, liveKeys.has(e.key))));
         for (let i = 0; i < weekEvents.length; i++) aggState.allRows[i] = freshRows[i];
         aggState.redraw();
       }, 60000);
