@@ -1370,8 +1370,8 @@ function renderEventResults(rows, tz) {
       const nowSec   = Math.floor(Date.now() / 1000);
       const elapsed  = nowSec - lastPlayed.actual;
       const countdown = expectedStart - nowSec;
-      const ctCls  = avgCT && elapsed > avgCT * 1.1 ? 'ct-danger' : avgCT && elapsed > avgCT ? 'ct-warning' : '';
-      const cdCls  = countdown < 0 ? 'ct-danger' : '';
+      const ctCls  = '';
+      const cdCls  = '';
       const cdVal  = countdown >= 0 ? fmtDur(countdown) : `+${fmtDur(-countdown)}`;
       const cdSub  = countdown >= 0 ? 'to expected start' : 'past expected start';
       grid.innerHTML =
