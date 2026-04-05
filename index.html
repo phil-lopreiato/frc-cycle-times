@@ -1361,7 +1361,8 @@ function renderEventResults(rows, tz) {
     const expectedStart = Math.max(nextUp.scheduled, lastPlayed.actual + (schedCT || 0));
     const prevCtSub   = lastPlayed.cycleTime != null ? `prev CT ${fmtDur(lastPlayed.cycleTime)}` : null;
     const startDelta  = fmtDeltaObj(nextUp.scheduled - expectedStart);
-    const startDeltaSub = `<span class="${startDelta.cls}">${startDelta.text}</span>`;
+    const startDeltaWord = (nextUp.scheduled - expectedStart) >= 0 ? 'ahead' : 'behind';
+    const startDeltaSub = `<span class="${startDelta.cls}">${startDelta.text} (${startDeltaWord})</span>`;
     liveCardEl.innerHTML =
       `<div class="card">` +
         `<h2 style="margin-bottom:10px"><span class="live-dot" style="display:inline-block;margin-right:6px;vertical-align:middle"></span>Next Up</h2>` +
