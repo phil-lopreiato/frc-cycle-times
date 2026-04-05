@@ -1432,7 +1432,8 @@ function renderEventResults(rows, tz) {
     const expectedStart = Math.max(nextUp.scheduled, lastPlayed.actual + (schedCT || 0));
     const prevCtSub      = lastPlayed.cycleTime != null ? `prev CT ${fmtDur(lastPlayed.cycleTime)}` : null;
     const lastDeltaFmt   = fmtDeltaObj(lastPlayed.delta);
-    const lastDeltaWord  = (lastPlayed.delta ?? 0) >= 0 ? 'ahead' : 'behind';
+    const lastDeltaLabel = (lastPlayed.delta ?? 0) > 60 ? 'Ahead'
+                         : (lastPlayed.delta ?? 0) >= -60 ? 'On Time' : 'Behind';
     liveCardEl.innerHTML =
       `<div class="card">` +
         `<h2 style="margin-bottom:10px"><span class="live-dot" style="display:inline-block;margin-right:6px;vertical-align:middle"></span>Next Up</h2>` +
@@ -1450,7 +1451,7 @@ function renderEventResults(rows, tz) {
       const cdSub  = countdown >= 0 ? 'to expected start' : 'Passed';
       grid.innerHTML =
         statCard(`Q${nextUp.matchNum}`,  'Next Match', '', `exp. ${fmtTime(expectedStart, tz)}`) +
-        statCard(`${lastDeltaFmt.text} (${lastDeltaWord})`, 'Δ Schedule', lastDeltaFmt.cls, prevCtSub) +
+        statCard(lastDeltaFmt.text, lastDeltaLabel, lastDeltaFmt.cls, prevCtSub) +
         statCard(`<span class="live-dot" style="display:inline-block;margin-right:4px;vertical-align:middle"></span>${fmtDur(elapsed)}`, 'Current CT', ctCls, schedCT != null ? `sched ${fmtDur(schedCT)}` : null) +
         statCard(cdVal, 'Countdown', cdCls, cdSub);
     }
