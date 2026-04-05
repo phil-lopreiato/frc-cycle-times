@@ -1449,8 +1449,8 @@ function renderEventResults(rows, tz) {
       const cdVal  = countdown >= 0 ? fmtDur(countdown) : `+${fmtDur(-countdown)}`;
       const cdSub  = countdown >= 0 ? 'to expected start' : 'past expected start';
       grid.innerHTML =
-        statCard(`Q${nextUp.matchNum}`,  'Next Match', '', prevCtSub) +
-        statCard(`${lastDeltaFmt.text} (${lastDeltaWord})`, 'Δ Schedule', lastDeltaFmt.cls, `exp. ${fmtTime(expectedStart, tz)}`) +
+        statCard(`Q${nextUp.matchNum}`,  'Next Match', '', `exp. ${fmtTime(expectedStart, tz)}`) +
+        statCard(`${lastDeltaFmt.text} (${lastDeltaWord})`, 'Δ Schedule', lastDeltaFmt.cls, prevCtSub) +
         statCard(`<span class="live-dot" style="display:inline-block;margin-right:4px;vertical-align:middle"></span>${fmtDur(elapsed)}`, 'Current CT', ctCls, schedCT != null ? `sched ${fmtDur(schedCT)}` : null) +
         statCard(cdVal, 'Countdown', cdCls, cdSub);
     }
