@@ -252,6 +252,7 @@ let liveCtCache  = {};            // eventKey → { overall, recent, label, load
 let homeYear     = CURRENT_YEAR;  // year currently shown on the home page
 let blocksCardExpanded = false;   // whether the per-block stats card is expanded
 let lastRefreshSuccessTime = null; // timestamp of last successful live data refresh
+const etagCache = {};              // eventKey → { etag, lastModified } for conditional requests
 
 // ── Connection-lost banner ────────────────────────────────────────────────────
 function showConnectionLostBanner() {
@@ -428,8 +429,27 @@ async function fetchEventRows(code, bustCache) {
       return rows;
     }
   }
-  const r = await fetch(tbaUrl(`/api/v3/event/${code}/matches`));
+
+  // Build conditional request headers if we have a prior ETag / Last-Modified for this event.
+  const condHeaders = {};
+  if (bustCache && etagCache[code]) {
+    if (etagCache[code].etag)         condHeaders['If-None-Match']     = etagCache[code].etag;
+    if (etagCache[code].lastModified) condHeaders['If-Modified-Since'] = etagCache[code].lastModified;
+  }
+
+  const r = await fetch(tbaUrl(`/api/v3/event/${code}/matches`), { headers: condHeaders });
+
+  // 304 Not Modified — data hasn't changed, return what we already have in memory.
+  if (r.status === 304) return matchesCache[code] ?? null;
+
   if (!r.ok) return null;
+
+  // Store response validators for future conditional requests.
+  etagCache[code] = {
+    etag:         r.headers.get('ETag'),
+    lastModified: r.headers.get('Last-Modified'),
+  };
+
   const rows = processMatches(await r.json());
   matchesCache[code] = rows;
   // Only persist completed events to avoid serving stale data for live events.
@@ -1595,8 +1615,13 @@ async function viewEvent(code) {
       onRefreshSuccess(); // mark the initial load as a successful update
       refreshTimer = setInterval(async () => {
         try {
+          const prev = matchesCache[code];
           const fresh = await fetchEventRows(code, true);
-          if (fresh && fresh.length) { renderEventResults(fresh); onRefreshSuccess(); }
+          if (fresh && fresh.length) {
+            // Only re-render if new data arrived (not a 304 returning the same object).
+            if (fresh !== prev) renderEventResults(fresh);
+            onRefreshSuccess();
+          }
         } catch { onRefreshError(); }
       }, 60000);
     }
@@ -1646,9 +1671,13 @@ async function viewWeek(year, weekNum) {
       refreshTimer = setInterval(async () => {
         if (!aggState) return;
         try {
+          const prevRows = weekEvents.map(e => matchesCache[e.key]);
           const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key, liveKeys.has(e.key))));
-          for (let i = 0; i < weekEvents.length; i++) aggState.allRows[i] = freshRows[i];
-          aggState.redraw();
+          let changed = false;
+          for (let i = 0; i < weekEvents.length; i++) {
+            if (freshRows[i] !== prevRows[i]) { aggState.allRows[i] = freshRows[i]; changed = true; }
+          }
+          if (changed) aggState.redraw();
           onRefreshSuccess();
         } catch { onRefreshError(); }
       }, 60000);
@@ -1779,9 +1808,13 @@ async function viewDistrictWeek(districtKey, weekNum) {
       refreshTimer = setInterval(async () => {
         if (!aggState) return;
         try {
+          const prevRows = weekEvents.map(e => matchesCache[e.key]);
           const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key, liveKeys.has(e.key))));
-          for (let i = 0; i < weekEvents.length; i++) aggState.allRows[i] = freshRows[i];
-          aggState.redraw();
+          let changed = false;
+          for (let i = 0; i < weekEvents.length; i++) {
+            if (freshRows[i] !== prevRows[i]) { aggState.allRows[i] = freshRows[i]; changed = true; }
+          }
+          if (changed) aggState.redraw();
           onRefreshSuccess();
         } catch { onRefreshError(); }
       }, 60000);
@@ -1909,9 +1942,13 @@ async function viewRegionalsWeek(year, weekNum) {
       refreshTimer = setInterval(async () => {
         if (!aggState) return;
         try {
+          const prevRows = weekEvents.map(e => matchesCache[e.key]);
           const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key, liveKeys.has(e.key))));
-          for (let i = 0; i < weekEvents.length; i++) aggState.allRows[i] = freshRows[i];
-          aggState.redraw();
+          let changed = false;
+          for (let i = 0; i < weekEvents.length; i++) {
+            if (freshRows[i] !== prevRows[i]) { aggState.allRows[i] = freshRows[i]; changed = true; }
+          }
+          if (changed) aggState.redraw();
           onRefreshSuccess();
         } catch { onRefreshError(); }
       }, 60000);
