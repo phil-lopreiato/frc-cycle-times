@@ -195,9 +195,17 @@ button.btn-primary { border: none; }
 .page-title { font-size: 1.4rem; font-weight: 700; margin-bottom: 4px; }
 .page-sub   { font-size: 0.85rem; color: var(--muted); margin-bottom: 20px; }
 .progress-note { color: var(--muted); font-size: 0.85rem; margin-top: 8px; }
+#connection-banner {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 10000;
+  background: var(--error); color: #fff;
+  text-align: center; padding: 9px 16px;
+  font-size: 0.875rem; font-weight: 500;
+  display: none;
+}
 </style>
 </head>
 <body>
+<div id="connection-banner"></div>
 <div class="container">
   <div id="app"><div class="loading">Loading…</div></div>
 </div>
@@ -243,6 +251,24 @@ let liveRefreshTimer = null;      // interval handle for auto-refresh
 let liveCtCache  = {};            // eventKey → { overall, recent, label, loadedAt }
 let homeYear     = CURRENT_YEAR;  // year currently shown on the home page
 let blocksCardExpanded = false;   // whether the per-block stats card is expanded
+let lastRefreshSuccessTime = null; // timestamp of last successful live data refresh
+
+// ── Connection-lost banner ────────────────────────────────────────────────────
+function showConnectionLostBanner() {
+  const banner = document.getElementById('connection-banner');
+  if (!banner) return;
+  const timeStr = lastRefreshSuccessTime
+    ? new Date(lastRefreshSuccessTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })
+    : 'unknown';
+  banner.textContent = `⚠ Connection lost · Last successful update: ${timeStr}`;
+  banner.style.display = 'block';
+}
+function hideConnectionLostBanner() {
+  const banner = document.getElementById('connection-banner');
+  if (banner) banner.style.display = 'none';
+}
+function onRefreshSuccess() { lastRefreshSuccessTime = Date.now(); hideConnectionLostBanner(); }
+function onRefreshError()   { showConnectionLostBanner(); }
 
 // ── Router ───────────────────────────────────────────────────────────────────
 window.addEventListener('hashchange', route);
@@ -255,6 +281,7 @@ function route() {
   const param = parts.slice(1).join('/');
   if (refreshTimer)  { clearInterval(refreshTimer);  refreshTimer  = null; }
   if (cycleCTTimer)  { clearInterval(cycleCTTimer);  cycleCTTimer  = null; }
+  hideConnectionLostBanner();
   destroyCharts();
   stopLiveRefresh();
   if (!page || page === 'home') return viewHome(parseInt(parts[1], 10) || CURRENT_YEAR);
@@ -652,11 +679,17 @@ async function refreshLiveCtStats() {
   // Show spinner
   const indicator = document.getElementById('refreshIndicator');
   if (indicator) indicator.innerHTML = '<span class="refresh-spinner"></span> Refreshing…';
-  await Promise.all(liveEvents.map(e => getLiveCtData(e.key, true)));
-  rerenderHomeEventLists();
-  if (indicator) {
-    const now = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
-    indicator.innerHTML = `Updated ${now}`;
+  try {
+    await Promise.all(liveEvents.map(e => getLiveCtData(e.key, true)));
+    rerenderHomeEventLists();
+    onRefreshSuccess();
+    if (indicator) {
+      const now = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
+      indicator.innerHTML = `Updated ${now}`;
+    }
+  } catch {
+    onRefreshError();
+    if (indicator) indicator.innerHTML = 'Update failed';
   }
 }
 
@@ -1559,11 +1592,12 @@ async function viewEvent(code) {
     renderEventResults(rows, eventData.timezone);
 
     if (isLive) {
+      onRefreshSuccess(); // mark the initial load as a successful update
       refreshTimer = setInterval(async () => {
         try {
           const fresh = await fetchEventRows(code, true);
-          if (fresh && fresh.length) renderEventResults(fresh);
-        } catch {}
+          if (fresh && fresh.length) { renderEventResults(fresh); onRefreshSuccess(); }
+        } catch { onRefreshError(); }
       }, 60000);
     }
   } catch (e) {
@@ -1607,12 +1641,16 @@ async function viewWeek(year, weekNum) {
     const today = new Date().toISOString().slice(0, 10);
     const liveWeekEvents = weekEvents.filter(e => e.start_date && e.end_date && e.start_date <= today && e.end_date >= today);
     if (liveWeekEvents.length) {
+      onRefreshSuccess();
       const liveKeys = new Set(liveWeekEvents.map(e => e.key));
       refreshTimer = setInterval(async () => {
         if (!aggState) return;
-        const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key, liveKeys.has(e.key))));
-        for (let i = 0; i < weekEvents.length; i++) aggState.allRows[i] = freshRows[i];
-        aggState.redraw();
+        try {
+          const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key, liveKeys.has(e.key))));
+          for (let i = 0; i < weekEvents.length; i++) aggState.allRows[i] = freshRows[i];
+          aggState.redraw();
+          onRefreshSuccess();
+        } catch { onRefreshError(); }
       }, 60000);
     }
   } catch (e) {
@@ -1736,12 +1774,16 @@ async function viewDistrictWeek(districtKey, weekNum) {
     const today = new Date().toISOString().slice(0, 10);
     const liveWeekEvents = weekEvents.filter(e => e.start_date && e.end_date && e.start_date <= today && e.end_date >= today);
     if (liveWeekEvents.length) {
+      onRefreshSuccess();
       const liveKeys = new Set(liveWeekEvents.map(e => e.key));
       refreshTimer = setInterval(async () => {
         if (!aggState) return;
-        const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key, liveKeys.has(e.key))));
-        for (let i = 0; i < weekEvents.length; i++) aggState.allRows[i] = freshRows[i];
-        aggState.redraw();
+        try {
+          const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key, liveKeys.has(e.key))));
+          for (let i = 0; i < weekEvents.length; i++) aggState.allRows[i] = freshRows[i];
+          aggState.redraw();
+          onRefreshSuccess();
+        } catch { onRefreshError(); }
       }, 60000);
     }
   } catch (e) {
@@ -1862,12 +1904,16 @@ async function viewRegionalsWeek(year, weekNum) {
     const today = new Date().toISOString().slice(0, 10);
     const liveWeekEvents = weekEvents.filter(e => e.start_date && e.end_date && e.start_date <= today && e.end_date >= today);
     if (liveWeekEvents.length) {
+      onRefreshSuccess();
       const liveKeys = new Set(liveWeekEvents.map(e => e.key));
       refreshTimer = setInterval(async () => {
         if (!aggState) return;
-        const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key, liveKeys.has(e.key))));
-        for (let i = 0; i < weekEvents.length; i++) aggState.allRows[i] = freshRows[i];
-        aggState.redraw();
+        try {
+          const freshRows = await Promise.all(weekEvents.map(e => fetchEventRows(e.key, liveKeys.has(e.key))));
+          for (let i = 0; i < weekEvents.length; i++) aggState.allRows[i] = freshRows[i];
+          aggState.redraw();
+          onRefreshSuccess();
+        } catch { onRefreshError(); }
       }, 60000);
     }
   } catch (e) {
