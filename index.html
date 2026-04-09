@@ -220,7 +220,7 @@ const LIVE_REFRESH_MS = 60 * 1000; // 60 seconds
 
 const CURRENT_YEAR = 2026;
 const FIRST_YEAR   = 2015;
-const LS_VERSION   = 2; // bump to invalidate all persisted cache entries
+const LS_VERSION   = 3; // bump to invalidate all persisted cache entries
 
 // ── localStorage persistence ──────────────────────────────────────────────────
 const LS_PREFIX = `ct_v${LS_VERSION}_`;
@@ -424,7 +424,7 @@ async function fetchEventRows(code, bustCache) {
   if (!bustCache) {
     const persisted = lsGet(`rows_${code}`);
     if (persisted) {
-      const rows = Object.assign(persisted.rows, { matchesPerTeam: persisted.matchesPerTeam });
+      const rows = Object.assign(persisted.rows, { matchesPerTeam: persisted.matchesPerTeam, teamCount: persisted.teamCount });
       matchesCache[code] = rows;
       return rows;
     }
@@ -456,12 +456,12 @@ async function fetchEventRows(code, bustCache) {
   // Past years: cache forever. Current year: only once the event's end_date has passed.
   const eventYear = parseInt(code.slice(0, 4), 10);
   if (eventYear < CURRENT_YEAR) {
-    lsSet(`rows_${code}`, { rows: Array.from(rows), matchesPerTeam: rows.matchesPerTeam }, null);
+    lsSet(`rows_${code}`, { rows: Array.from(rows), matchesPerTeam: rows.matchesPerTeam, teamCount: rows.teamCount }, null);
   } else {
     const today = new Date().toISOString().slice(0, 10);
     const eventObj = (eventsCache[CURRENT_YEAR] || []).find(e => e.key === code);
     if (eventObj && eventObj.end_date < today) {
-      lsSet(`rows_${code}`, { rows: Array.from(rows), matchesPerTeam: rows.matchesPerTeam }, null);
+      lsSet(`rows_${code}`, { rows: Array.from(rows), matchesPerTeam: rows.matchesPerTeam, teamCount: rows.teamCount }, null);
     }
     // Event is still active or unknown — keep only in memory so it refreshes on next load.
   }
@@ -559,6 +559,7 @@ function processMatches(data) {
     let best = 0, bestFreq = 0;
     for (const [val, freq] of freqs) { if (freq > bestFreq) { best = val; bestFreq = freq; } }
     rows.matchesPerTeam = best;
+    rows.teamCount = teamCounts.size;
   }
 
   return rows;
@@ -2227,12 +2228,14 @@ function aggSortVal(events, allRows, col, i) {
     case 2: return e.name;
     case 3: return [e.city, e.state_prov].filter(Boolean).join(', ');
     case 4: return rows ? rows.filter(r => r.actual).length : 0;
-    case 5: { const s = scheduledCycleTimes(rows); return s.length ? mean(s) : Infinity; }
-    case 6: { const c = cycleTimes(rows); return c.length ? mean(c) : Infinity; }
-    case 7: { const c = cycleTimes(rows); return c.length ? median(c) : Infinity; }
-    case 8: { const c = cycleTimes(rows); return c.length ? stddev(c) : Infinity; }
-    case 9: { const d = deltas(rows); return d.length ? mean(d) : Infinity; }
-    case 10: { const l = lastPlayedDelta(rows); return l ? l.delta : Infinity; }
+    case 5: return rows?.teamCount ?? 0;
+    case 6: return rows?.matchesPerTeam ?? 0;
+    case 7: { const s = scheduledCycleTimes(rows); return s.length ? mean(s) : Infinity; }
+    case 8: { const c = cycleTimes(rows); return c.length ? mean(c) : Infinity; }
+    case 9: { const c = cycleTimes(rows); return c.length ? median(c) : Infinity; }
+    case 10: { const c = cycleTimes(rows); return c.length ? stddev(c) : Infinity; }
+    case 11: { const d = deltas(rows); return d.length ? mean(d) : Infinity; }
+    case 12: { const l = lastPlayedDelta(rows); return l ? l.delta : Infinity; }
     default: return i;
   }
 }
@@ -2256,6 +2259,8 @@ function renderAggTable(events, allRows, excluded, sortCol, sortDir) {
     { label: 'Event',        sortable: true  },
     { label: 'Location',     sortable: true  },
     { label: 'Matches',      sortable: true  },
+    { label: 'Teams',        sortable: true  },
+    { label: 'Matches/Team', sortable: true  },
     { label: 'Avg Sched CT', sortable: true  },
     { label: 'Mean CT',      sortable: true  },
     { label: 'Median CT',    sortable: true  },
@@ -2316,6 +2321,8 @@ function renderAggTable(events, allRows, excluded, sortCol, sortDir) {
       <td><a href="#event/${e.key}">${e.name}</a> <span class="muted-cell">(${e.key})</span></td>
       <td class="muted-cell">${[e.city, e.state_prov].filter(Boolean).join(', ')}</td>
       <td class="muted-cell">${played || '—'}</td>
+      <td class="muted-cell">${allRows[i]?.teamCount || '—'}</td>
+      <td class="muted-cell">${allRows[i]?.matchesPerTeam || '—'}</td>
       <td class="muted-cell">${schedCts.length ? fmtDur(mean(schedCts)) : '—'}</td>
       <td>${cts.length ? fmtDur(mean(cts)) : '—'}</td>
       <td>${cts.length ? fmtDur(median(cts)) : '—'}</td>
