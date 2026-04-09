@@ -2279,7 +2279,11 @@ function renderAggTable(events, allRows, excluded, sortCol, sortDir) {
 
   const indices = Array.from({ length: events.length }, (_, i) => i);
   if (sortCol != null) {
+    const hasPlayed = i => allRows[i] && allRows[i].some(r => r.actual);
     indices.sort((a, b) => {
+      const ap = hasPlayed(a), bp = hasPlayed(b);
+      if (!ap && bp) return 1;
+      if (ap && !bp) return -1;
       const va = aggSortVal(events, allRows, sortCol, a);
       const vb = aggSortVal(events, allRows, sortCol, b);
       const cmp = typeof va === 'string' ? va.localeCompare(vb) : va - vb;
