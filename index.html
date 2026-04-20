@@ -220,7 +220,8 @@ const LIVE_REFRESH_MS = 60 * 1000; // 60 seconds
 
 const CURRENT_YEAR = 2026;
 const FIRST_YEAR   = 2015;
-const LS_VERSION   = 3; // bump to invalidate all persisted cache entries
+const LS_VERSION   = 4; // bump to invalidate all persisted cache entries
+const CURRENT_YEAR_ROWS_TTL_MS = 6 * 60 * 60 * 1000; // current-season completed-event rows cache TTL
 
 // ── localStorage persistence ──────────────────────────────────────────────────
 const LS_PREFIX = `ct_v${LS_VERSION}_`;
@@ -463,7 +464,7 @@ async function fetchEventRows(code, bustCache) {
     const today = new Date().toISOString().slice(0, 10);
     const eventObj = (eventsCache[CURRENT_YEAR] || []).find(e => e.key === code);
     if (eventObj && eventObj.end_date < today) {
-      lsSet(`rows_${code}`, { rows: Array.from(rows), matchesPerTeam: rows.matchesPerTeam, teamCount: rows.teamCount }, null);
+      lsSet(`rows_${code}`, { rows: Array.from(rows), matchesPerTeam: rows.matchesPerTeam, teamCount: rows.teamCount }, CURRENT_YEAR_ROWS_TTL_MS);
     }
     // Event is still active or unknown — keep only in memory so it refreshes on next load.
   }
