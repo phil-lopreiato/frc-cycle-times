@@ -1,6 +1,6 @@
 # frc-cycle-times
 
-A single-page web app for analyzing FRC qualification match cycle times across events, weeks, districts, and seasons, using data from [The Blue Alliance](https://www.thebluealliance.com/).
+A single-page web app for analyzing FRC match cycle times (qualifications and playoffs) across events, weeks, districts, and seasons, using data from [The Blue Alliance](https://www.thebluealliance.com/).
 
 ## What it does
 
@@ -11,7 +11,7 @@ A single-page web app for analyzing FRC qualification match cycle times across e
 | View | URL pattern | Description |
 |---|---|---|
 | Home | `#home`, `#home/2025` | All events for a season grouped by week. Shows live current CT for running events. |
-| Event Detail | `#event/2026nyli2` | Per-match log with cycle times, Δ schedule, stats, charts, and a live "Next Up" card. |
+| Event Detail | `#event/2026nyli2` | Per-match log (quals + playoffs) with cycle times, Δ schedule, qual stats/charts, playoff stats, and a live "Next Up" card. |
 | Week Aggregate | `#week/2026/3`, `#week/2026/cmp` | Pooled stats and per-event comparison table for all events in a given week. |
 | Season Overview | `#overall`, `#season/2025` | Pooled stats and per-event table for an entire season, plus a cycle time by week chart. |
 | District Home | `#district/2026fim` | Season weeks for a single district. |
@@ -48,7 +48,7 @@ All per-event aggregate tables are sortable by any column:
 Unplayed/future events are always sorted to the bottom.
 
 ### Per-block stats (event detail)
-A collapsible card shows stats broken down by *schedule block* (stretches of matches between breaks), including match range, count, mean, median, std dev, and Δ schedule per block.
+A collapsible card shows stats broken down by *schedule block* (stretches of qual matches between breaks), including match range, count, mean, median, std dev, and Δ schedule per block, plus a playoffs summary row.
 
 ## Outlier detection
 
@@ -56,7 +56,7 @@ Outlier cycle times are excluded from all stats and charts (but remain visible i
 
 A match's cycle time is flagged as an outlier if **any** of the following apply:
 
-1. **IQR fence** — the cycle time falls outside Q1 − 1.5 × IQR or Q3 + 1.5 × IQR, computed across all non-break cycle times at the event. (Requires at least 4 data points; skipped otherwise.)
+1. **IQR fence** — the cycle time falls outside Q1 − 1.5 × IQR or Q3 + 1.5 × IQR, computed separately for quals and playoffs. (Requires at least 4 data points in that phase; skipped otherwise.)
 2. **Replay / out-of-order** — the match's actual start time is earlier than a lower-numbered match's actual start time, indicating it was replayed or recorded out of order. Replays are also excluded from the Δ schedule chart.
 
 Break matches (first match after a scheduled gap > 15 minutes) are never assigned a cycle time at all, so they are neither included in stats nor counted as outliers.

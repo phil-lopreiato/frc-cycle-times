@@ -251,6 +251,8 @@ let liveRefreshTimer = null;      // interval handle for auto-refresh
 let liveCtCache  = {};            // eventKey → { overall, recent, label, loadedAt }
 let homeYear     = CURRENT_YEAR;  // year currently shown on the home page
 let blocksCardExpanded = false;   // whether the per-block stats card is expanded
+let evtPlayoffCardExpanded = false; // whether event playoff stats card is expanded
+let aggPlayoffCardExpanded = false; // whether aggregate playoff stats card is expanded
 let lastRefreshSuccessTime = null; // timestamp of last successful live data refresh
 const etagCache = {};              // eventKey → { etag, lastModified } for conditional requests
 
@@ -477,21 +479,54 @@ function iqrOutlierBounds(values) {
   return { lo: q1 - 1.5 * iqr, hi: q3 + 1.5 * iqr };
 }
 
-function processMatches(data) {
-  const quals = data.filter(m => m.comp_level === 'qm').sort((a, b) => a.match_number - b.match_number);
+function playoffLevelOrder(level) {
+  switch (level) {
+    case 'ef': return 1;
+    case 'qf': return 2;
+    case 'sf': return 3;
+    case 'f':  return 4;
+    default:   return 9;
+  }
+}
 
-  // Build rows with schedule-derived fields (delta, scheduledCT, isPostBreak based on match order)
-  const rows = quals.map((m, i) => {
+function matchTournamentOrder(m) {
+  if (m.comp_level === 'qm') return m.match_number || 0;
+  return 1000000 + playoffLevelOrder(m.comp_level) * 10000 + (m.set_number || 0) * 100 + (m.match_number || 0);
+}
+
+function matchDisplayLabel(m) {
+  if (m.comp_level === 'qm') return `Q${m.match_number}`;
+  const level = (m.comp_level || '').toUpperCase();
+  const set = m.set_number != null ? m.set_number : '';
+  return `${level}${set}M${m.match_number}`;
+}
+
+function processMatchGroup(matches, phase) {
+  const sortedMatches = [...matches].sort((a, b) => matchTournamentOrder(a) - matchTournamentOrder(b));
+
+  // Build rows with schedule-derived fields (delta, scheduledCT, isPostBreak based on order)
+  const rows = sortedMatches.map((m, i) => {
     let scheduledCT = null, isPostBreak = (i === 0);
     if (i > 0) {
-      const schedGap = (m.time && quals[i - 1].time) ? m.time - quals[i - 1].time : null;
+      const schedGap = (m.time && sortedMatches[i - 1].time) ? m.time - sortedMatches[i - 1].time : null;
       if (schedGap != null && schedGap > BREAK_GAP) isPostBreak = true;
       else scheduledCT = schedGap;
     }
     const delta = (m.time && m.actual_time) ? m.time - m.actual_time : null;
-    return { matchNum: m.match_number, scheduled: m.time, actual: m.actual_time,
-             cycleTime: null, scheduledCT, isPostBreak,
-             delta, isOutlier: false, isReplay: false };
+    return {
+      matchNum: m.match_number,
+      matchLabel: matchDisplayLabel(m),
+      sortOrder: matchTournamentOrder(m),
+      phase,
+      scheduled: m.time,
+      actual: m.actual_time,
+      cycleTime: null,
+      scheduledCT,
+      isPostBreak,
+      delta,
+      isOutlier: false,
+      isReplay: false,
+    };
   });
 
   // Compute cycle times in actual play order; only override isPostBreak from actual gaps
@@ -519,7 +554,7 @@ function processMatches(data) {
   // Detect out-of-order replays: null their delta for the Δ schedule chart
   for (const r of rows) {
     if (!r.actual) continue;
-    if (rows.some(r2 => r2.actual && r2.matchNum > r.matchNum && r2.actual < r.actual)) {
+    if (rows.some(r2 => r2.actual && r2.sortOrder > r.sortOrder && r2.actual < r.actual)) {
       r.isReplay = true;
       r.delta = null;
       r.isOutlier = true;
@@ -533,12 +568,26 @@ function processMatches(data) {
     if (r.cycleTime != null && (r.cycleTime < lo || r.cycleTime > hi)) r.isOutlier = true;
   }
 
+  return rows;
+}
+
+function processMatches(data) {
+  const quals = data.filter(m => m.comp_level === 'qm');
+  const playoffs = data.filter(m => m.comp_level !== 'qm');
+  const rows = [
+    ...processMatchGroup(quals, 'qual'),
+    ...processMatchGroup(playoffs, 'playoff'),
+  ];
+
   // Sort for display: played matches by actual time, unplayed at end by scheduled/match order
   rows.sort((a, b) => {
     if (a.actual && b.actual) return a.actual - b.actual;
     if (a.actual) return -1;
     if (b.actual) return 1;
-    return (a.scheduled || a.matchNum) - (b.scheduled || b.matchNum);
+    if (a.scheduled && b.scheduled) return a.scheduled - b.scheduled;
+    if (a.scheduled) return -1;
+    if (b.scheduled) return 1;
+    return a.sortOrder - b.sortOrder;
   });
 
   // Compute typical matches per team (exclude surrogate appearances, use mode)
@@ -591,12 +640,21 @@ function stddev(a) {
   const m = mean(a);
   return Math.sqrt(a.reduce((s, x) => s + (x - m) ** 2, 0) / a.length);
 }
-function cycleTimes(rows) { return (rows || []).filter(r => r.cycleTime != null && !r.isOutlier).map(r => r.cycleTime); }
-function scheduledCycleTimes(rows) {
-  if (!rows) return [];
-  return rows.filter(r => r.scheduledCT != null).map(r => r.scheduledCT);
+function scopedRows(rows, scope) {
+  const all = rows || [];
+  if (!scope || scope === 'qual') return all.filter(r => r.phase !== 'playoff');
+  if (scope === 'playoff') return all.filter(r => r.phase === 'playoff');
+  return all;
 }
-function deltas(rows)     { return (rows || []).filter(r => r.delta != null).map(r => r.delta); }
+function cycleTimes(rows, scope) {
+  return scopedRows(rows, scope).filter(r => r.cycleTime != null && !r.isOutlier).map(r => r.cycleTime);
+}
+function scheduledCycleTimes(rows, scope) {
+  return scopedRows(rows, scope).filter(r => r.scheduledCT != null).map(r => r.scheduledCT);
+}
+function deltas(rows, scope) {
+  return scopedRows(rows, scope).filter(r => r.delta != null).map(r => r.delta);
+}
 
 // Returns a hex color for a schedule delta value in minutes.
 // Positive = early (ahead), negative = late (behind).
@@ -615,13 +673,13 @@ function schedDeltaColor(dMin, alpha) {
 // recent  = mean of gaps between the last MATCH_WINDOW played matches
 //           e.g. last 5 played matches -> up to 4 gaps
 function computeLiveCts(rows) {
-  const allCts = cycleTimes(rows);
+  const allCts = cycleTimes(rows, 'qual');
   if (!allCts.length) return null;
   const overall = mean(allCts);
 
   const MATCH_WINDOW = 5;
   // Find the last MATCH_WINDOW rows that have actually been played
-  const playedRows = (rows || []).filter(r => r.actual != null);
+  const playedRows = scopedRows(rows, 'qual').filter(r => r.actual != null);
   const windowRows = playedRows.slice(-MATCH_WINDOW);
 
   // Compute gaps between consecutive rows in that window, skipping post-break
@@ -657,8 +715,9 @@ async function getLiveCtData(eventKey, bustCache) {
   }
   const rows = await fetchEventRows(eventKey, bustCache);
   const ct     = computeLiveCts(rows);
-  const played = rows ? rows.filter(r => r.actual).length : 0;
-  const total  = rows ? rows.length : 0;
+  const qualRows = scopedRows(rows, 'qual');
+  const played = qualRows.filter(r => r.actual).length;
+  const total  = qualRows.length;
   const result = { ct, played, total, loadedAt: Date.now() };
   liveCtCache[eventKey] = result;
   return result;
@@ -1284,8 +1343,11 @@ async function viewHome(year) {
 
 // ── Per-block stats card ──────────────────────────────────────────────────────
 function renderBlocksCard(rows) {
+  const qualRows = scopedRows(rows, 'qual');
+  const playoffRows = scopedRows(rows, 'playoff');
+
   // Split rows into schedule blocks based on the isPostBreak flag, in match-number order
-  const sorted = [...rows].sort((a, b) => a.matchNum - b.matchNum);
+  const sorted = [...qualRows].sort((a, b) => a.matchNum - b.matchNum);
   const blocks = [];
   let current = [];
   for (const r of sorted) {
@@ -1295,41 +1357,58 @@ function renderBlocksCard(rows) {
   if (current.length) blocks.push(current);
 
   const bodyId = 'evt-blocks-body';
-  let body;
-  if (blocks.length < 2) {
-    body = '<p style="color:var(--muted);font-size:0.875rem;margin-top:12px">Not enough schedule blocks to compare.</p>';
-  } else {
-    let tbl = `<div class="table-wrap" style="margin-top:14px">
-      <table class="agg-table block-table"><thead><tr>
-        <th>Block</th><th>Range</th><th>Played</th>
-        <th>Avg Sched CT</th><th>Mean CT</th><th>Median CT</th><th>Std Dev</th><th>Avg Δ Sched</th>
-      </tr></thead><tbody>`;
-    for (let i = 0; i < blocks.length; i++) {
-      const blk      = blocks[i];
-      const cts      = cycleTimes(blk);
-      const ds       = deltas(blk);
-      const schedCts = scheduledCycleTimes(blk);
-      const played   = blk.filter(r => r.actual).length;
-      const first    = blk[0].matchNum;
-      const last     = blk[blk.length - 1].matchNum;
-      const outliers = blk.filter(r => r.cycleTime != null && r.isOutlier).length;
-      const avgD     = ds.length ? fmtDeltaObj(mean(ds)) : { text: '—', cls: '' };
-      const outlierNote = outliers > 0
-        ? ` <span style="color:var(--muted);font-size:0.78rem">(${outliers} outlier${outliers > 1 ? 's' : ''})</span>` : '';
-      tbl += `<tr>
-        <td>Block ${i + 1}</td>
-        <td class="muted-cell">Q${first}–Q${last}</td>
-        <td class="muted-cell">${played}/${blk.length}</td>
-        <td class="muted-cell">${schedCts.length ? fmtDur(mean(schedCts)) : '—'}</td>
-        <td>${cts.length ? fmtDur(mean(cts)) : '—'}${outlierNote}</td>
-        <td>${cts.length ? fmtDur(median(cts)) : '—'}</td>
-        <td class="muted-cell">${cts.length >= 2 ? fmtDur(stddev(cts)) : '—'}</td>
-        <td class="${avgD.cls}">${avgD.text}</td>
-      </tr>`;
-    }
-    tbl += '</tbody></table></div>';
-    body = tbl;
+  let tbl = `<div class="table-wrap" style="margin-top:14px">
+    <table class="agg-table block-table"><thead><tr>
+      <th>Block</th><th>Range</th><th>Played</th>
+      <th>Avg Sched CT</th><th>Mean CT</th><th>Median CT</th><th>Std Dev</th><th>Avg Δ Sched</th>
+    </tr></thead><tbody>`;
+  for (let i = 0; i < blocks.length; i++) {
+    const blk      = blocks[i];
+    const cts      = cycleTimes(blk, 'qual');
+    const ds       = deltas(blk, 'qual');
+    const schedCts = scheduledCycleTimes(blk, 'qual');
+    const played   = blk.filter(r => r.actual).length;
+    const first    = blk[0].matchNum;
+    const last     = blk[blk.length - 1].matchNum;
+    const outliers = blk.filter(r => r.cycleTime != null && r.isOutlier).length;
+    const avgD     = ds.length ? fmtDeltaObj(mean(ds)) : { text: '—', cls: '' };
+    const outlierNote = outliers > 0
+      ? ` <span style="color:var(--muted);font-size:0.78rem">(${outliers} outlier${outliers > 1 ? 's' : ''})</span>` : '';
+    tbl += `<tr>
+      <td>Block ${i + 1}</td>
+      <td class="muted-cell">Q${first}–Q${last}</td>
+      <td class="muted-cell">${played}/${blk.length}</td>
+      <td class="muted-cell">${schedCts.length ? fmtDur(mean(schedCts)) : '—'}</td>
+      <td>${cts.length ? fmtDur(mean(cts)) : '—'}${outlierNote}</td>
+      <td>${cts.length ? fmtDur(median(cts)) : '—'}</td>
+      <td class="muted-cell">${cts.length >= 2 ? fmtDur(stddev(cts)) : '—'}</td>
+      <td class="${avgD.cls}">${avgD.text}</td>
+    </tr>`;
   }
+  const playoffSorted   = [...playoffRows].sort((a, b) => a.sortOrder - b.sortOrder);
+  const playoffCts      = cycleTimes(playoffSorted, 'playoff');
+  const playoffDs       = deltas(playoffSorted, 'playoff');
+  const playoffSchedCts = scheduledCycleTimes(playoffSorted, 'playoff');
+  const playoffPlayed   = playoffSorted.filter(r => r.actual).length;
+  const playoffOutliers = playoffSorted.filter(r => r.cycleTime != null && r.isOutlier).length;
+  const playoffAvgD     = playoffDs.length ? fmtDeltaObj(mean(playoffDs)) : { text: '—', cls: '' };
+  const playoffRange = playoffSorted.length ? `${playoffSorted[0].matchLabel}–${playoffSorted[playoffSorted.length - 1].matchLabel}` : '—';
+  const playoffOutlierNote = playoffOutliers > 0
+    ? ` <span style="color:var(--muted);font-size:0.78rem">(${playoffOutliers} outlier${playoffOutliers > 1 ? 's' : ''})</span>` : '';
+  tbl += `<tr>
+    <td>Playoffs</td>
+    <td class="muted-cell">${playoffRange}</td>
+    <td class="muted-cell">${playoffSorted.length ? `${playoffPlayed}/${playoffSorted.length}` : '—'}</td>
+    <td class="muted-cell">${playoffSchedCts.length ? fmtDur(mean(playoffSchedCts)) : '—'}</td>
+    <td>${playoffCts.length ? fmtDur(mean(playoffCts)) : '—'}${playoffOutlierNote}</td>
+    <td>${playoffCts.length ? fmtDur(median(playoffCts)) : '—'}</td>
+    <td class="muted-cell">${playoffCts.length >= 2 ? fmtDur(stddev(playoffCts)) : '—'}</td>
+    <td class="${playoffAvgD.cls}">${playoffAvgD.text}</td>
+  </tr>`;
+  tbl += '</tbody></table></div>';
+  const body = (blocks.length === 0 && playoffSorted.length === 0)
+    ? '<p style="color:var(--muted);font-size:0.875rem;margin-top:12px">No schedule block data available yet.</p>'
+    : tbl;
 
   const expanded = blocksCardExpanded;
   return `<div class="card">
@@ -1349,14 +1428,107 @@ window.toggleBlocksCard = function() {
   if (toggle) toggle.textContent = blocksCardExpanded ? 'Hide ▲' : 'Show ▼';
 };
 
+function renderEventPlayoffCard(rows) {
+  const playoffRows = scopedRows(rows, 'playoff');
+  const playoffCts = cycleTimes(playoffRows, 'playoff');
+  const playoffDs = deltas(playoffRows, 'playoff');
+  const playoffSchedCts = scheduledCycleTimes(playoffRows, 'playoff');
+  const playoffOutlierCount = playoffRows.filter(r => r.cycleTime != null && r.isOutlier).length;
+  const playoffMinRow = playoffRows.filter(r => r.cycleTime != null && !r.isOutlier).sort((a, b) => a.cycleTime - b.cycleTime)[0];
+  const playoffMinInfo = playoffMinRow ? { match: playoffMinRow.matchLabel } : null;
+  const expanded = evtPlayoffCardExpanded;
+  const bodyId = 'evt-playoff-body';
+
+  let body = '<p style="color:var(--muted);font-size:0.875rem;margin-top:12px">No playoff timing data yet.</p>';
+  if (playoffRows.length) {
+    body = `
+      <div class="stats-grid" id="evt-playoff-stats">${renderStats(playoffCts, playoffDs, playoffSchedCts, playoffMinInfo, playoffOutlierCount)}</div>
+      <div class="charts-grid" style="margin-top:14px">
+        <div class="card"><h2>Playoff Cycle Time Distribution</h2><div class="chart-wrap"><canvas id="evt-playoff-dist"></canvas></div></div>
+        <div class="card"><h2>Playoff Ahead / Behind</h2><div class="chart-wrap"><canvas id="evt-playoff-sched"></canvas></div></div>
+      </div>`;
+  }
+
+  return `<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleEventPlayoffCard()">
+      <h2 style="margin-bottom:0">Playoff Statistics</h2>
+      <button class="btn-ghost" id="evt-playoff-toggle" onclick="event.stopPropagation();toggleEventPlayoffCard()">${expanded ? 'Hide ▲' : 'Show ▼'}</button>
+    </div>
+    <div id="${bodyId}"${expanded ? '' : ' class="hidden"'}>${body}</div>
+  </div>`;
+}
+
+window.toggleEventPlayoffCard = function() {
+  evtPlayoffCardExpanded = !evtPlayoffCardExpanded;
+  const body   = document.getElementById('evt-playoff-body');
+  const toggle = document.getElementById('evt-playoff-toggle');
+  if (body)   body.classList.toggle('hidden', !evtPlayoffCardExpanded);
+  if (toggle) toggle.textContent = evtPlayoffCardExpanded ? 'Hide ▲' : 'Show ▼';
+};
+
+function renderAggPlayoffCard(cts, ds, schedCts, minInfo, outlierCount) {
+  const expanded = aggPlayoffCardExpanded;
+  const bodyId = 'agg-playoff-body';
+  const hasData = cts.length > 0;
+  return `<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleAggPlayoffCard()">
+      <h2 style="margin-bottom:0">Playoff Stats</h2>
+      <button class="btn-ghost" id="agg-playoff-toggle" onclick="event.stopPropagation();toggleAggPlayoffCard()">${expanded ? 'Hide ▲' : 'Show ▼'}</button>
+    </div>
+    <div id="${bodyId}"${expanded ? '' : ' class="hidden"'} style="margin-top:14px">
+      <div class="stats-grid" id="agg-playoff-stats">${renderStats(cts, ds, schedCts, minInfo, outlierCount)}</div>
+      <p id="agg-playoff-empty" style="color:var(--muted);font-size:0.875rem;margin-top:12px"${hasData ? ' class="hidden"' : ''}>No playoff timing data yet.</p>
+      <div class="card" style="margin-top:14px;margin-bottom:0">
+        <h2>Playoff Distribution</h2>
+        <div class="chart-wrap"><canvas id="agg-playoff-dist"></canvas></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+window.toggleAggPlayoffCard = function() {
+  aggPlayoffCardExpanded = !aggPlayoffCardExpanded;
+  const body   = document.getElementById('agg-playoff-body');
+  const toggle = document.getElementById('agg-playoff-toggle');
+  if (body)   body.classList.toggle('hidden', !aggPlayoffCardExpanded);
+  if (toggle) toggle.textContent = aggPlayoffCardExpanded ? 'Hide ▲' : 'Show ▼';
+};
+
 // ── VIEW: Event detail ────────────────────────────────────────────────────────
 function renderEventResults(rows, tz) {
-  const cts = cycleTimes(rows), ds = deltas(rows), schedCts = scheduledCycleTimes(rows);
-  const outlierCount = rows.filter(r => r.cycleTime != null && r.isOutlier).length;
-  const minRow  = rows.filter(r => r.cycleTime != null && !r.isOutlier).sort((a, b) => a.cycleTime - b.cycleTime)[0];
+  const qualRows = scopedRows(rows, 'qual');
+  const playoffRows = scopedRows(rows, 'playoff');
+  const cts = cycleTimes(rows, 'qual'), ds = deltas(rows, 'qual'), schedCts = scheduledCycleTimes(rows, 'qual');
+  const playoffCts = cycleTimes(rows, 'playoff');
+  const outlierCount = qualRows.filter(r => r.cycleTime != null && r.isOutlier).length;
+  const minRow  = qualRows.filter(r => r.cycleTime != null && !r.isOutlier).sort((a, b) => a.cycleTime - b.cycleTime)[0];
   const minInfo = minRow ? { match: `Q${minRow.matchNum}` } : null;
   document.getElementById('evt-stats').innerHTML = renderStats(cts, ds, schedCts, minInfo, outlierCount)
     + (rows.matchesPerTeam ? statCard(rows.matchesPerTeam, 'Matches / Team') : '');
+
+  const playoffEl = document.getElementById('evt-playoff-card');
+  if (playoffEl) playoffEl.innerHTML = renderEventPlayoffCard(rows);
+  if (playoffCts.length) {
+    mkChart('evt-playoff-dist', distChartConfig(playoffCts));
+  }
+  const playoffSchedRows = playoffRows.filter(r => r.delta != null);
+  if (playoffSchedRows.length) {
+    const labels = playoffSchedRows.map(r => r.matchLabel);
+    const data = playoffSchedRows.map(r => +(r.delta / 60).toFixed(2));
+    const colors = data.map(d => schedDeltaColor(d, 'b3'));
+    mkChart('evt-playoff-sched', {
+      type: 'bar',
+      data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: colors.map(c => c.replace('b3', '')), borderWidth: 1 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: i => (i.raw >= 0 ? '+' : '') + i.raw.toFixed(2) + ' min' } } },
+        scales: {
+          x: { grid: { display: false } },
+          y: { title: { display: true, text: '+ ahead  /  − behind (min)' }, grid: { color: c => c.tick.value === 0 ? '#88888888' : '#88888822' } },
+        },
+      },
+    });
+  }
 
   if (cts.length) {
     mkChart('evt-dist', distChartConfig(cts));
@@ -1365,9 +1537,9 @@ function renderEventResults(rows, tz) {
     if (distCard) distCard.innerHTML += '<p style="color:var(--muted);font-size:0.875rem;margin-top:8px">No cycle time data available yet.</p>';
   }
 
-  const schedRows = rows.filter(r => r.delta != null);
+  const schedRows = qualRows.filter(r => r.delta != null);
   if (schedRows.length) {
-    const replayNums = new Set(rows.filter(r => r.isReplay).map(r => r.matchNum));
+    const replayNums = new Set(qualRows.filter(r => r.isReplay).map(r => r.matchNum));
     // Build data arrays: nulls at breaks, replay gap annotations tracked separately
     const allDvals = [], allLabels = [], allPtColors = [], breakNullIdxs = [], replayGaps = [];
     for (let i = 0; i < schedRows.length; i++) {
@@ -1428,7 +1600,7 @@ function renderEventResults(rows, tz) {
     });
   }
 
-  const replayNums = new Set(rows.filter(r => r.isReplay).map(r => r.matchNum));
+  const qualReplayNums = new Set(qualRows.filter(r => r.isReplay).map(r => r.matchNum));
   let prevActualMatchNum = -1; // track last non-replay played match number
   // Build timezone abbreviation for column header
   const tzLabel = tz ? (() => {
@@ -1444,10 +1616,10 @@ function renderEventResults(rows, tz) {
     const r = rows[i];
     // Detect replay gap: consecutive non-replay played matches with a match-number gap
     let hasReplayGap = false;
-    if (r.actual && !r.isReplay && prevActualMatchNum >= 0 && r.matchNum > prevActualMatchNum + 1) {
+    if (r.phase === 'qual' && r.actual && !r.isReplay && prevActualMatchNum >= 0 && r.matchNum > prevActualMatchNum + 1) {
       const gapNums = [];
       for (let mn = prevActualMatchNum + 1; mn < r.matchNum; mn++) {
-        if (replayNums.has(mn)) gapNums.push(`Q${mn}`);
+        if (qualReplayNums.has(mn)) gapNums.push(`Q${mn}`);
       }
       if (gapNums.length) {
         tbl += `<tr class="replay-gap-row"><td colspan="6">— ${gapNums.join(', ')} played out of order —</td></tr>`;
@@ -1458,14 +1630,14 @@ function renderEventResults(rows, tz) {
     const d = fmtDeltaObj(r.delta);
     const rowCls = r.isReplay ? ' replay-row' : r.isOutlier ? ' outlier-row' : '';
     tbl += `<tr class="${rowCls}">
-      <td><strong>Q${r.matchNum}</strong>${r.isReplay ? '<span class="replay-badge">REPLAY</span>' : ''}</td>
+      <td><strong>${r.matchLabel || `Q${r.matchNum}`}</strong>${r.isReplay ? '<span class="replay-badge">REPLAY</span>' : ''}</td>
       <td class="muted-cell">${fmtTime(r.scheduled, tz)}</td>
       <td>${r.actual ? fmtTime(r.actual, tz) : '<span class="muted-cell">not played</span>'}</td>
       <td class="${d.cls}">${d.text}</td>
       <td class="muted-cell">${fmtDur(r.scheduledCT)}</td>
       <td class="${r.cycleTime == null ? 'muted-cell' : ''}">${fmtDur(r.cycleTime)}${r.isOutlier && !r.isReplay ? '<span class="outlier-badge">(outlier)</span>' : ''}</td>
     </tr>`;
-    if (r.actual && !r.isReplay) prevActualMatchNum = r.matchNum;
+    if (r.phase === 'qual' && r.actual && !r.isReplay) prevActualMatchNum = r.matchNum;
   }
   tbl += '</tbody></table>';
   document.getElementById('evt-table').innerHTML = tbl;
@@ -1475,12 +1647,12 @@ function renderEventResults(rows, tz) {
 
   // ── Live next-match card ─────────────────────────────────────────────────
   if (cycleCTTimer) { clearInterval(cycleCTTimer); cycleCTTimer = null; }
-  const lastPlayed = [...rows].reverse().find(r => r.actual);
-  const nextUp     = lastPlayed ? rows.find(r => !r.actual && r.matchNum > lastPlayed.matchNum) : null;
+  const lastPlayed = [...qualRows].reverse().find(r => r.actual);
+  const nextUp     = lastPlayed ? qualRows.find(r => !r.actual && r.matchNum > lastPlayed.matchNum) : null;
   const liveCardEl = document.getElementById('evt-live-card');
   if (liveCardEl && lastPlayed && nextUp && nextUp.scheduled && lastPlayed.scheduled &&
       (nextUp.scheduled - lastPlayed.scheduled) < BREAK_GAP) {
-    const avgCT  = mean(cycleTimes(rows)) || null;
+    const avgCT  = mean(cycleTimes(rows, 'qual')) || null;
     const schedCT = nextUp.scheduledCT != null ? nextUp.scheduledCT : avgCT;
     // Expected start: the later of the scheduled time or last match's actual start + scheduled CT
     const expectedStart = Math.max(nextUp.scheduled, lastPlayed.actual + (schedCT || 0));
@@ -1517,7 +1689,7 @@ function renderEventResults(rows, tz) {
 
   const lastEl = document.getElementById('evt-last-updated');
   if (lastEl) {
-    const playedNums = rows.filter(r => r.actual).map(r => r.matchNum);
+    const playedNums = qualRows.filter(r => r.actual).map(r => r.matchNum);
     const lastMatch  = playedNums.length ? ` · Q${Math.max(...playedNums)} played` : '';
     const now = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
     lastEl.textContent = `Updated ${now}${lastMatch}`;
@@ -1548,7 +1720,7 @@ async function viewEvent(code) {
           <div class="event-header-name" id="evt-name"></div>
           <div class="event-header-detail" id="evt-detail"></div>
         </div>
-        <h2>Cycle Time Statistics</h2>
+        <h2>Cycle Time Statistics (Qual)</h2>
         <div class="stats-grid" id="evt-stats"></div>
       </div>
       <div id="evt-live-card"></div>
@@ -1556,6 +1728,7 @@ async function viewEvent(code) {
         <div class="card"><h2>Distribution</h2><div class="chart-wrap"><canvas id="evt-dist"></canvas></div></div>
         <div class="card"><h2>Ahead / Behind Schedule</h2><div class="chart-wrap"><canvas id="evt-sched"></canvas></div></div>
       </div>
+      <div id="evt-playoff-card"></div>
       <div id="evt-blocks-card"></div>
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -1580,7 +1753,7 @@ async function viewEvent(code) {
     ]);
 
     if (!rows) throw new Error('Could not load match data for this event');
-    if (rows.length === 0) throw new Error('No qualification matches found for this event yet');
+    if (rows.length === 0) throw new Error('No matches found for this event yet');
 
     const today     = new Date().toISOString().slice(0, 10);
     const isLive    = eventData.start_date && eventData.end_date &&
@@ -1984,28 +2157,29 @@ async function viewRegionalsOverall(year) {
 function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaChartMode, seasonYear, csvSlug) {
   aggState = { events, allRows, excluded: new Set(), deltaChartMode, sortCol: null, sortDir: 'asc', seasonYear: seasonYear || null, csvSlug: csvSlug || null };
 
-  function pooled() {
+  function pooled(scope) {
     const cts = [], ds = [], schedCts = [];
     let minCt = Infinity, minInfo = null, outlierCount = 0;
     for (let i = 0; i < allRows.length; i++) {
       if (aggState.excluded.has(i) || !allRows[i]) continue;
-      cts.push(...cycleTimes(allRows[i]));
-      ds.push(...deltas(allRows[i]));
-      schedCts.push(...scheduledCycleTimes(allRows[i]));
-      outlierCount += allRows[i].filter(r => r.cycleTime != null && r.isOutlier).length;
-      for (const r of allRows[i]) {
+      cts.push(...cycleTimes(allRows[i], scope));
+      ds.push(...deltas(allRows[i], scope));
+      schedCts.push(...scheduledCycleTimes(allRows[i], scope));
+      outlierCount += scopedRows(allRows[i], scope).filter(r => r.cycleTime != null && r.isOutlier).length;
+      for (const r of scopedRows(allRows[i], scope)) {
         if (r.cycleTime != null && !r.isOutlier && r.cycleTime < minCt) {
           minCt = r.cycleTime;
-          minInfo = { match: `Q${r.matchNum}`, event: events[i].key };
+          minInfo = { match: r.matchLabel || `Q${r.matchNum}`, event: events[i].key };
         }
       }
     }
     return { cts, ds, schedCts, minInfo, outlierCount };
   }
 
-  const { cts: pooledCts, ds: pooledDs, schedCts: pooledSchedCts, minInfo: pooledMinInfo, outlierCount: pooledOutlierCount } = pooled();
-  const eventsWithData = events.filter((_, i) => allRows[i] && cycleTimes(allRows[i]).length > 0);
-  const totalMatches   = allRows.reduce((s, r) => s + (r ? r.filter(x => x.actual).length : 0), 0);
+  const { cts: pooledCts, ds: pooledDs, schedCts: pooledSchedCts, minInfo: pooledMinInfo, outlierCount: pooledOutlierCount } = pooled('qual');
+  const { cts: pooledPlayoffCts, ds: pooledPlayoffDs, schedCts: pooledPlayoffSchedCts, minInfo: pooledPlayoffMinInfo, outlierCount: pooledPlayoffOutlierCount } = pooled('playoff');
+  const eventsWithData = events.filter((_, i) => allRows[i] && cycleTimes(allRows[i], 'qual').length > 0);
+  const totalMatches   = allRows.reduce((s, r) => s + scopedRows(r, 'qual').filter(x => x.actual).length, 0);
   const backLabel      = backHref === '#home' || backHref.startsWith('#home/') ? 'All Events' : 'Back';
   const seasonSelector = seasonYear != null
     ? `<div style="margin-bottom:12px">${seasonSelectorHtml(seasonYear, 'season')}</div>`
@@ -2017,7 +2191,7 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
     <div class="page-title">${title}</div>
     <p class="page-sub">${subtitle}${totalMatches ? ` · ${totalMatches.toLocaleString()} matches played` : ''}</p>
     <div class="card">
-      <h2>Cycle Time Statistics</h2>
+      <h2>Cycle Time Statistics (Qual)</h2>
       <div class="stats-grid" id="agg-stats-grid">${renderStats(pooledCts, pooledDs, pooledSchedCts, pooledMinInfo, pooledOutlierCount)}</div>
     </div>
     <div class="charts-grid">
@@ -2029,6 +2203,7 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
       </div>
     </div>
     ${deltaChartMode === 'per-week' ? '<div class="card"><h2>Cycle Time by Week</h2><div class="chart-wrap"><canvas id="agg-week-ct"></canvas></div></div>' : ''}
+    ${renderAggPlayoffCard(pooledPlayoffCts, pooledPlayoffDs, pooledPlayoffSchedCts, pooledPlayoffMinInfo, pooledPlayoffOutlierCount)}
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
         <h2 style="margin-bottom:0">By Event</h2>
@@ -2039,6 +2214,7 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
   setApp(html);
 
   if (pooledCts.length) mkChart('agg-dist', distChartConfig(pooledCts));
+  if (pooledPlayoffCts.length) mkChart('agg-playoff-dist', distChartConfig(pooledPlayoffCts));
   if (deltaChartMode === 'per-event') {
     renderPerEventDeltaChart(eventsWithData, events, allRows);
   } else {
@@ -2049,11 +2225,17 @@ function renderAggregatePage(title, subtitle, backHref, events, allRows, deltaCh
 
   aggState.pooled    = pooled;
   aggState.redraw    = function() {
-    const { cts, ds, schedCts, minInfo, outlierCount } = aggState.pooled();
+    const { cts, ds, schedCts, minInfo, outlierCount } = aggState.pooled('qual');
+    const { cts: playoffCts, ds: playoffDs, schedCts: playoffSchedCts, minInfo: playoffMinInfo, outlierCount: playoffOutlierCount } = aggState.pooled('playoff');
     const statsEl = document.getElementById('agg-stats-grid');
     if (statsEl) statsEl.innerHTML = renderStats(cts, ds, schedCts, minInfo, outlierCount);
     if (cts.length) mkChart('agg-dist', distChartConfig(cts));
-    const withData = aggState.events.filter((_, i) => !aggState.excluded.has(i) && allRows[i] && cycleTimes(allRows[i]).length > 0);
+    const playoffStatsEl = document.getElementById('agg-playoff-stats');
+    if (playoffStatsEl) playoffStatsEl.innerHTML = renderStats(playoffCts, playoffDs, playoffSchedCts, playoffMinInfo, playoffOutlierCount);
+    const playoffMsgEl = document.getElementById('agg-playoff-empty');
+    if (playoffMsgEl) playoffMsgEl.classList.toggle('hidden', playoffCts.length > 0);
+    if (playoffCts.length) mkChart('agg-playoff-dist', distChartConfig(playoffCts));
+    const withData = aggState.events.filter((_, i) => !aggState.excluded.has(i) && allRows[i] && cycleTimes(allRows[i], 'qual').length > 0);
     if (aggState.deltaChartMode === 'per-event') renderPerEventDeltaChart(withData, aggState.events, allRows);
     else { renderPerWeekDeltaChart(aggState.events, allRows); renderPerWeekCtChart(aggState.events, allRows, aggState.excluded); }
     const wrap = document.getElementById('agg-table-wrap');
@@ -2227,7 +2409,7 @@ function aggSortVal(events, allRows, col, i) {
     case 1: return isCmp(e) ? 998 : e.week ?? 999;
     case 2: return e.name;
     case 3: return [e.city, e.state_prov].filter(Boolean).join(', ');
-    case 4: return rows ? rows.filter(r => r.actual).length : 0;
+    case 4: return scopedRows(rows, 'qual').filter(r => r.actual).length;
     case 5: return rows?.teamCount ?? 0;
     case 6: return rows?.matchesPerTeam ?? 0;
     case 7: { const s = scheduledCycleTimes(rows); return s.length ? mean(s) : Infinity; }
@@ -2241,9 +2423,9 @@ function aggSortVal(events, allRows, col, i) {
 }
 
 function lastPlayedDelta(rows) {
-  if (!rows) return null;
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const r = rows[i];
+  const qualRows = scopedRows(rows, 'qual');
+  for (let i = qualRows.length - 1; i >= 0; i--) {
+    const r = qualRows[i];
     if (r.actual && r.delta != null && !r.isOutlier) return { delta: r.delta, matchNum: r.matchNum };
   }
   return null;
@@ -2297,7 +2479,7 @@ function renderAggTable(events, allRows, excluded, sortCol, sortDir) {
     const cts      = cycleTimes(allRows[i]);
     const ds       = deltas(allRows[i]);
     const schedCts = scheduledCycleTimes(allRows[i]);
-    const played   = allRows[i] ? allRows[i].filter(r => r.actual).length : 0;
+    const played   = scopedRows(allRows[i], 'qual').filter(r => r.actual).length;
     const avgD     = ds.length ? fmtDeltaObj(mean(ds)) : { text: '—', cls: '' };
     const wkYear   = aggState?.seasonYear || CURRENT_YEAR;
     const wkHref   = eventWeekHref(e, wkYear);
