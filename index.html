@@ -553,13 +553,16 @@ function processMatchGroup(matches, phase) {
     }
   }
 
-  // Detect out-of-order replays: null their delta for the Δ schedule chart
-  for (const r of rows) {
-    if (!r.actual) continue;
-    if (rows.some(r2 => r2.actual && r2.sortOrder > r.sortOrder && r2.actual < r.actual)) {
-      r.isReplay = true;
-      r.delta = null;
-      r.isOutlier = true;
+  // Detect out-of-order replays in quals only: null their delta for the Δ schedule chart.
+  // Playoffs are interleaved by set, so sortOrder does not represent strict play order there.
+  if (phase === 'qual') {
+    for (const r of rows) {
+      if (!r.actual) continue;
+      if (rows.some(r2 => r2.actual && r2.sortOrder > r.sortOrder && r2.actual < r.actual)) {
+        r.isReplay = true;
+        r.delta = null;
+        r.isOutlier = true;
+      }
     }
   }
 
