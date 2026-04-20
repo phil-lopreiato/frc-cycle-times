@@ -480,6 +480,8 @@ function iqrOutlierBounds(values) {
 }
 
 function playoffLevelOrder(level) {
+  // Tournament round order: ef (eighthfinals), qf (quarterfinals),
+  // sf (semifinals), f (finals).
   switch (level) {
     case 'ef': return 1;
     case 'qf': return 2;
