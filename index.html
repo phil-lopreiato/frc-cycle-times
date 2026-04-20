@@ -422,14 +422,40 @@ async function fetchDistricts(year) {
   return sorted;
 }
 
+// Returns true if rows for a completed current-year event appear to be missing playoff data,
+// indicating the data was cached before playoffs ran and should be re-fetched.
+function isStaleCompletedRows(code, rows) {
+  if (!rows || !rows.length) return false;
+  const eventYear = parseInt(code.slice(0, 4), 10);
+  if (eventYear !== CURRENT_YEAR) return false;
+  const today = new Date().toISOString().slice(0, 10);
+  const eventObj = (eventsCache[CURRENT_YEAR] || []).find(e => e.key === code);
+  if (!eventObj || eventObj.end_date >= today) return false; // still active or unknown
+  return !rows.some(r => r.phase === 'playoff');
+}
+
 async function fetchEventRows(code, bustCache) {
-  if (!bustCache && matchesCache[code]) return matchesCache[code];
+  if (!bustCache && matchesCache[code]) {
+    if (isStaleCompletedRows(code, matchesCache[code])) {
+      // In-session stale: event ended but cached rows have no playoff data.
+      // Evict from both in-memory and localStorage so the fresh TBA fetch below runs.
+      delete matchesCache[code];
+      try { localStorage.removeItem(LS_PREFIX + `rows_${code}`); } catch {}
+    } else {
+      return matchesCache[code];
+    }
+  }
   if (!bustCache) {
     const persisted = lsGet(`rows_${code}`);
     if (persisted) {
       const rows = Object.assign(persisted.rows, { matchesPerTeam: persisted.matchesPerTeam, teamCount: persisted.teamCount });
-      matchesCache[code] = rows;
-      return rows;
+      if (isStaleCompletedRows(code, rows)) {
+        // Persisted data predates playoffs; evict so the fresh TBA fetch below runs.
+        try { localStorage.removeItem(LS_PREFIX + `rows_${code}`); } catch {}
+      } else {
+        matchesCache[code] = rows;
+        return rows;
+      }
     }
   }
 
