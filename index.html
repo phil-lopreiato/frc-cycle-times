@@ -430,7 +430,7 @@ function isStaleCompletedRows(code, rows) {
   if (eventYear !== CURRENT_YEAR) return false;
   const today = new Date().toISOString().slice(0, 10);
   const eventObj = (eventsCache[CURRENT_YEAR] || []).find(e => e.key === code);
-  if (!eventObj || eventObj.end_date >= today) return false; // still active or unknown
+  if (!eventObj || eventObj.end_date > today) return false; // still active or unknown
   return !rows.some(r => r.phase === 'playoff');
 }
 
@@ -489,7 +489,7 @@ async function fetchEventRows(code, bustCache) {
   } else {
     const today = new Date().toISOString().slice(0, 10);
     const eventObj = (eventsCache[CURRENT_YEAR] || []).find(e => e.key === code);
-    if (eventObj && eventObj.end_date < today) {
+    if (eventObj && eventObj.end_date <= today) {
       lsSet(`rows_${code}`, { rows: Array.from(rows), matchesPerTeam: rows.matchesPerTeam, teamCount: rows.teamCount }, CURRENT_YEAR_ROWS_TTL_MS);
     }
     // Event is still active or unknown — keep only in memory so it refreshes on next load.
